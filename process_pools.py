@@ -458,7 +458,6 @@ def make_guide_region_assignments(merged_regions, merged_regions_infos, guide_fi
             if guide_seq_id in guide_matches:
                 guide_match_count += 1
                 matched_region_count = len(all_guide_matches[guide_seq_id])
-                print('matched reigon count for ' + str(guide_seq_id) + '(' + str(all_guide_matches) + ') is ' + str(matched_region_count))
                 region_name = guide_matches[guide_seq_id]
                 region_info = merged_regions_infos[region_name]
                 region_chr = region_info['chr']
@@ -475,7 +474,6 @@ def make_guide_region_assignments(merged_regions, merged_regions_infos, guide_fi
 
     print('Matched ' + str(guide_match_count) + '/' + str(len(guide_df)) + ' guides to regions from read alignments. Wrote matches to ' + out_file)
 
-    print(guide_df)
     # next write information about all regions plus the file for crispresso input
     crispresso_output_file = output_folder + 'CRISPRessoPooledRegions.txt'
     all_region_output_file = output_folder + 'all_regions.txt'
@@ -777,9 +775,6 @@ def plot_guides_and_heatmap(guide_plot_df, df_data, col_to_plot, df_data_title, 
         raise Exception('No columns found in df_data with suffix ' + col_to_plot + ' in columns: ' + str(list(df_data.columns)))
     df_to_plot = df_data[cols_to_plot]
     df_to_plot.columns = [col.replace('_' + col_to_plot, '') for col in cols_to_plot]
-    print('df_to_plot')
-    print(df_to_plot)
-    print(df_to_plot.dtypes)
 
     # Create a custom color palette for the letters
     color_mapping = {'A': '#E3EFA9', 'T': '#CCCFE0', 'C': '#FBC6C6', 'G': '#FCE588', '.': '#F4F4F6', '-':'#BEC0C6', '+':'#BEC0C6', 'default': 'gray'}
@@ -787,19 +782,11 @@ def plot_guides_and_heatmap(guide_plot_df, df_data, col_to_plot, df_data_title, 
     #color_mapping = {'A': '#FFB7B2', 'T': '#C3CDE6', 'C': '#E2F0CB', 'G': '#B5EAD7', '.': '#FFDAC1', 'default': 'gray'}
     unique_letters = color_mapping.keys()
     colors = [color_mapping[letter] for letter in unique_letters]
-    print('colors: ' + str(colors))
-    print('letters: ' + str(unique_letters))
     cmap = ListedColormap(colors)
-    print('cmap: ' + str(cmap))
 
     # Map letters to integers for heatmap
     letter_to_int = {letter: i for i, letter in enumerate(unique_letters)}
-    print('letter to int: ' + str(letter_to_int))
     df_mapped = guide_plot_df.applymap(lambda x: letter_to_int.get(x, letter_to_int['default']))
-    print('df mapped:')
-    print(df_mapped)
-    print('orig:')
-    print(guide_plot_df)
 
     # Create the figure and gridspec
     fig = plt.figure(figsize=(16, 16))
