@@ -75,7 +75,7 @@ def main(sample_file, guide_file, genome_file, output_folder, n_processors=8, sk
     aggregated_stats.to_csv(output_folder + 'aggregated_stats_all.txt', sep="\t", index=False)
     aggregated_stats_good = aggregated_stats.dropna()
     guide_plot_df = create_guide_df_for_plotting(aggregated_stats_good)
-    guide_plot_df.index = aggregated_stats_good['guide_chr'] + ':' + aggregated_stats_good['guide_pos'].astype(str) + ' ' + aggregated_stats_good['guide_name']
+    guide_plot_df.index = aggregated_stats_good['guide_chr'] + ':' + aggregated_stats_good['guide_pos'].astype(str) + ' ' + aggregated_stats_good['guide_id']
 
     print('Plotting for ' + str(len(aggregated_stats_good)) + '/' + str(len(aggregated_stats)) + ' guides')
 
@@ -671,7 +671,7 @@ def view_complete_guide_summary(output_name):
 def plot_heatmap(output_name):
     d = pd.read_csv(output_name + ".complete_guide_summary.txt", sep='\t')
     d.dropna(inplace=True)
-    d.set_index('guide_label', inplace=True)
+    d.set_index('guide_id', inplace=True)
     fig=plt.figure(figsize=(12,12), dpi= 100, facecolor='w', edgecolor='k')
     sns.heatmap(d[['highest_a_g_pct', 'highest_c_t_pct', 'highest_indel_pct']].astype(float), annot=True, fmt=".4f",cmap='Reds')
     fig.savefig(output_name + ".heatmap.pdf") 
@@ -679,7 +679,7 @@ def plot_heatmap(output_name):
 def plot_heatmap_sub(output_name, guide_name):
     d = pd.read_csv(output_name + ".complete_guide_summary.txt", sep='\t')
     d.dropna(inplace=True)
-    d.set_index('guide_label', inplace=True)
+    d.set_index('guide_id', inplace=True)
     dsub = d[d['ontarget_name'] == guide_name]
     fig=plt.figure(figsize=(6,6), dpi= 100, facecolor='w', edgecolor='k')
     sns.heatmap(dsub[['highest_a_g_pct', 'highest_c_t_pct', 'highest_indel_pct']].astype(float), annot=True, fmt=".4f",cmap='Reds')
