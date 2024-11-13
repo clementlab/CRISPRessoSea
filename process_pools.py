@@ -17,7 +17,7 @@ from CRISPResso2 import CRISPResso2Align
 import matplotlib as mpl
 mpl.rcParams['pdf.fonttype'] = 42
 
-def main(sample_file, guide_file, genome_file, output_folder, n_processors=8, skip_bad_chrs=True):
+def main(sample_file, guide_file, genome_file, output_folder, n_processors=8, skip_bad_chrs=True, plot_only_complete_guides=False, min_amplicon_coverage=100):
 
     if sample_file.endswith('.xlsx'):
         sample_df = pd.read_excel(sample_file)
@@ -83,9 +83,17 @@ def main(sample_file, guide_file, genome_file, output_folder, n_processors=8, sk
 
         aggregated_stats = pd.merge(aggregated_stats, guide_summary_df, how='left', on='guide_id')
 
+        #for the columns in guide_summary_df, if tot_reads is less than min_amplicon_coverage, set all other columns to NA
+        for col in guide_summary_df.columns:
+            if col.startswith(sample_name) and col != sample_name + '_tot_reads':
+                aggregated_stats.loc[aggregated_stats[sample_name + '_tot_reads'] < min_amplicon_coverage, col] = np.nan
+
     aggregated_stats.sort_values(by='sort_index', inplace=True)
     aggregated_stats.to_csv(output_folder + 'aggregated_stats_all.txt', sep="\t", index=False)
-    aggregated_stats_good = aggregated_stats.dropna()
+    if plot_only_complete_guides:
+        aggregated_stats_good = aggregated_stats.dropna()
+    else:
+        aggregated_stats_good = aggregated_stats
     guide_plot_df = create_guide_df_for_plotting(aggregated_stats_good)
     guide_plot_df.index = aggregated_stats_good['guide_chr'] + ':' + aggregated_stats_good['guide_pos'].astype(str) + ' ' + aggregated_stats_good['guide_id']
 
@@ -555,7 +563,7 @@ def make_guide_region_assignments(merged_regions, merged_regions_infos, guide_fi
     return crispresso_output_file, guide_df, region_df
 
 
-def run_crispresso_with_assigned_regions(experiment_name, fastq_r1, fastq_r2, genome_file, crispresso_region_file, output_folder, n_processors=8, suppress_output=True):
+def run_crispresso_with_assigned_regions(experiment_name, fastq_r1, fastq_r2, genome_file, crispresso_region_file, output_folder, n_processors=8, suppress_output=True, skip_failed_subruns=True):
     """
     Run CRISPResso on a specific sample with the assigned regions
 
@@ -566,6 +574,8 @@ def run_crispresso_with_assigned_regions(experiment_name, fastq_r1, fastq_r2, ge
     - genome_file: path to the genome file
     - crispresso_region_file: path to the file with region assignments
     - n_processors: number of processors to use
+    - suppress_output: whether to suppress output from CRISPRessoPooled
+    - skip_failed_subruns: whether to skip failed CRISPRessoPooled subruns. If true, CRISPRessoPooled will complete even if individual subruns fail (e.g. due to too few aligned reads).
 
     returns:
     - the output folder for this CRISPResso run
@@ -582,11 +592,15 @@ def run_crispresso_with_assigned_regions(experiment_name, fastq_r1, fastq_r2, ge
     if suppress_output:
         suppress_output_string = ' --verbosity 1'
 
+    skip_failed_string = ""
+    if skip_failed_subruns:
+        skip_failed_string = " --skip_failed"
+
     CRISPResso_output_folder = output_folder + "CRISPRessoPooled_on_"+experiment_name
 
     command = 'CRISPRessoPooled -f ' + crispresso_region_file + ' -x ' + genome_file + ' -n ' + experiment_name + ' ' + ' -r1 ' + fastq_r1 + r2_string + output_string + ' --min_reads_to_use_region 1 --default_min_aln_score 20 ' + \
                 ' --base_editor_output --quantification_window_center -10 --quantification_window_size 16' + \
-                ' -p ' + str(n_processors) + ' --no_rerun  --exclude_bp_from_left 0 --exclude_bp_from_right 0 --plot_window_size 10' + suppress_output_string
+                ' -p ' + str(n_processors) + ' --no_rerun  --exclude_bp_from_left 0 --exclude_bp_from_right 0 --plot_window_size 10' + suppress_output_string + skip_failed_string
 
     crispresso_run_is_complete = False
     if os.path.exists(CRISPResso_output_folder):
@@ -828,6 +842,11 @@ def plot_guides_and_heatmap(guide_plot_df, df_data, col_to_plot, df_data_title, 
     df_to_plot = df_data[cols_to_plot]
     df_to_plot.columns = [col.replace('_' + col_to_plot, '') for col in cols_to_plot]
 
+    print('here')
+    print(df_to_plot.dtypes)
+    print(df_to_plot)
+    print('done')
+
     # Create a custom color palette for the letters
     color_mapping = {'A': '#E3EFA9', 'T': '#CCCFE0', 'C': '#FBC6C6', 'G': '#FCE588', '.': '#F4F4F6', '-':'#BEC0C6', '+':'#BEC0C6', 'default': 'gray'}
     #color_mapping = {'A': '#90adc6', 'T': '#e9eaec', 'C': '#fad02c', 'G': '#333652', '.': '#c8df52', '-':'#F67E7D',  'default': 'gray'}
@@ -858,7 +877,8 @@ def plot_guides_and_heatmap(guide_plot_df, df_data, col_to_plot, df_data_title, 
         df_data_heat_max = df_to_plot.max(skipna=True).max(skipna=True)
     if df_data_heat_min is None:
         df_data_heat_min = df_to_plot.min(skipna=True).min(skipna=True)
-    sns.heatmap(df_to_plot, annot=data_annot, cmap='Blues', ax=ax2, yticklabels=False, vmin=df_data_heat_min, vmax=df_data_heat_max)
+    ax_heat = sns.heatmap(df_to_plot, annot=data_annot, cmap='Blues', ax=ax2, yticklabels=False, vmin=df_data_heat_min, vmax=df_data_heat_max)
+    ax_heat.collections[0].cmap.set_bad('0.7')
     ax2.set_title(df_data_title)
     ax2.set_yticks([])
 
@@ -883,6 +903,8 @@ if __name__ == '__main__':
     parser.add_argument('-x', '--genome_file', help='Bowtie2-indexed genome file - files ending in .bt2 must be present in the folder.', required=True)
     parser.add_argument('-p', '--n_processes', help='Number of processes to use', type=int, default=8)
     parser.add_argument('--skip_bad_chrs', help='Skip regions on bad chromosomes (chrUn, random, etc)', action='store_true')
+    parser.add_argument('--plot_only_complete_guides', help='Plot only guides with all values. If not set, all guides will be plotted.', action='store_true')
+    parser.add_argument('--min_amplicon_coverage', help='Minimum number of reads to cover a location for it to be plotted. Otherwise, it will be set as NA', default=10, type=int)
 
     args = parser.parse_args()
 
@@ -900,5 +922,6 @@ if __name__ == '__main__':
         raise Exception('Guide file not found at ' + args.guide_file)
 
     main(sample_file=args.sample_file, guide_file=args.guide_file, genome_file=args.genome_file,
-          output_folder=output_folder, n_processors=args.n_processes, skip_bad_chrs=args.skip_bad_chrs)
+          output_folder=output_folder, n_processors=args.n_processes, skip_bad_chrs=args.skip_bad_chrs, 
+          plot_only_complete_guides=args.plot_only_complete_guides, min_amplion_coverage=args.min_amplicon_coverage)
     print('Finished')
