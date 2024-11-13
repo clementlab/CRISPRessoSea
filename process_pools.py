@@ -40,6 +40,17 @@ def main(sample_file, guide_file, genome_file, output_folder, n_processors=8, sk
         first_sample_r2 = first_sample['fastq_r2']
     if genome_file.endswith('.fa'):
         genome_file = genome_file[:-3]
+    
+    for idx, row in sample_df.iterrows():
+        sample_name = row['Name']
+        sample_r1 = row['fastq_r1']
+        sample_r2 = None
+        if 'fastq_r2' in row and row['fastq_r2'] is not None:
+            sample_r2 = row['fastq_r2']
+        if not os.path.exists(sample_r1):
+            raise Exception('Fastq R1 file for sample ' + sample_name + ' not found at ' + sample_r1)
+        if sample_r2 is not None and not os.path.exists(sample_r2):
+            raise Exception('Fastq R2 file for sample ' + sample_name + ' not found at ' + sample_r2)
 
     summary_output_folder = output_folder + 'summary/'
     if not os.path.exists(summary_output_folder):
@@ -68,6 +79,7 @@ def main(sample_file, guide_file, genome_file, output_folder, n_processors=8, sk
         sample_df.loc[sample_idx, 'guide_summary_file'] = guide_summary_file
 
         guide_summary_df.columns = ['guide_id','guide_label'] + [sample_name + '_' + x for x in guide_summary_df.columns[2:]]
+        guide_summary_df.drop(columns=['guide_label'], inplace=True)
 
         aggregated_stats = pd.merge(aggregated_stats, guide_summary_df, how='left', on='guide_id')
 
@@ -77,11 +89,21 @@ def main(sample_file, guide_file, genome_file, output_folder, n_processors=8, sk
     guide_plot_df = create_guide_df_for_plotting(aggregated_stats_good)
     guide_plot_df.index = aggregated_stats_good['guide_chr'] + ':' + aggregated_stats_good['guide_pos'].astype(str) + ' ' + aggregated_stats_good['guide_id']
 
-    print('Plotting for ' + str(len(aggregated_stats_good)) + '/' + str(len(aggregated_stats)) + ' guides')
+    print('Plotting for ' + str(len(aggregated_stats_good)) + '/' + str(len(aggregated_stats)) + ' guides after removing guides missing data in any samples')
 
     col_to_plot = 'highest_a_g_pct'
     col_title = 'Highest A/G %'
     plot_suffix = 'highest_a_g_pct'
+    plot_guides_and_heatmap(guide_plot_df, aggregated_stats_good, col_to_plot, col_title, outfile_name=output_folder + plot_suffix)
+
+    col_to_plot = 'highest_c_t_pct'
+    col_title = 'Highest C/T %'
+    plot_suffix = 'highest_c_t_pct'
+    plot_guides_and_heatmap(guide_plot_df, aggregated_stats_good, col_to_plot, col_title, outfile_name=output_folder + plot_suffix)
+
+    col_to_plot = 'highest_indel_pct'
+    col_title = 'Highest Indel %'
+    plot_suffix = 'highest_indel_pct'
     plot_guides_and_heatmap(guide_plot_df, aggregated_stats_good, col_to_plot, col_title, outfile_name=output_folder + plot_suffix)
 
 
@@ -216,7 +238,7 @@ def run_initial_demux(experiment_name, fastq_r1, fastq_r2, genome_file, output_f
             crispresso_pooled_info = CRISPRessoShared.load_crispresso_info(crispresso_info_file_path=CRISPResso_output_folder + '/CRISPResso2Pooled_info.json')
             if 'demultiplexing_genome_only_regions' in crispresso_pooled_info['running_info']['finished_steps']:
                 crispresso_run_is_complete = True
-                print('CRISPResso output folder already exists, skipping CRISPResso run')
+                print('CRISPResso output folder already exists for initial demultiplexing, skipping CRISPResso run')
         except:
             pass
     if not crispresso_run_is_complete:
@@ -450,11 +472,14 @@ def make_guide_region_assignments(merged_regions, merged_regions_infos, guide_fi
     guide_df['matched_region_count'] = 0
     guide_df['matched_region'] = 'NA'
     with open(out_file, 'w') as fout:
-        fout.write('guide_id\tguide_name\tguide_seq\tguide_seq_with_pam\tmatched_region_count\tregion_chr\tregion_start\tregion_end\tregion_read_count\tregion_seq\n')
+        fout.write('guide_id\tguide_name\tguide_seq\tguide_seq_with_pam\tguide_chr\tguide_pos\tmatched_region_count\tmatched_regions\tregion_chr\tregion_start\tregion_end\tregion_read_count\tregion_seq\n')
         for guide_idx, guide_row in guide_df.iterrows():
-            guide_seq = guide_row['guide_seq_no_gaps']
             guide_seq_id = guide_row['guide_id']
+            guide_seq = guide_row['guide_seq_no_gaps']
+            guide_seq_with_pam = guide_row['guide_seq_no_gaps_with_pam']
             guide_seq_name = guide_row['guide_name']
+            guide_chr = guide_row['guide_chr']
+            guide_pos = guide_row['guide_pos']
             if guide_seq_id in guide_matches:
                 guide_match_count += 1
                 matched_region_count = len(all_guide_matches[guide_seq_id])
@@ -464,13 +489,13 @@ def make_guide_region_assignments(merged_regions, merged_regions_infos, guide_fi
                 region_start = region_info['start']
                 region_end = region_info['end']
                 region_seq = region_info['seq']
-                fout.write('\t'.join([str(x) for x in [guide_seq_id, guide_seq_name, guide_seq, matched_region_count, region_chr, region_start, region_end, region_info['region_count'], region_seq]]) + '\n')
+                fout.write('\t'.join([str(x) for x in [guide_seq_id, guide_seq_name, guide_seq, guide_seq_with_pam, guide_chr, guide_pos, matched_region_count, region_chr, region_start, region_end, region_info['region_count'], region_seq]]) + '\n')
                 guide_df.loc[guide_idx, 'matched_region_count'] = matched_region_count
                 guide_df.loc[guide_idx, 'matched_region'] = region_name
 
             else:
                 guide_nomatch_count += 1
-                fout.write('\t'.join([str(x) for x in [guide_seq_id, guide_seq_name, guide_seq, 0, 'NA', 'NA', 'NA', 'NA', 'NA']]) + '\n')
+                fout.write('\t'.join([str(x) for x in [guide_seq_id, guide_seq_name, guide_seq, guide_seq_with_pam, guide_chr, guide_pos, 0, 'NA', 'NA', 'NA', 'NA', 'NA']]) + '\n')
 
     print('Matched ' + str(guide_match_count) + '/' + str(len(guide_df)) + ' guides to regions from read alignments. Wrote matches to ' + out_file)
 
@@ -481,7 +506,7 @@ def make_guide_region_assignments(merged_regions, merged_regions_infos, guide_fi
     region_nomatch_count = 0
     printed_crispresso_count = 0
     with open(all_region_output_file,'w') as rout, open(crispresso_output_file,'w') as cout:
-        rout.write('region_id\tchr\tstart\tend\tread_count\tseq\tguide_matches\tguide_id\tguide_name\tguide_seq\n')
+        rout.write('region_id\tchr\tstart\tend\tread_count\tseq\tguide_matches\tguide_id\tguide_name\tguide_seq\tguide_chr\tguide_pos\n')
         for region in merged_regions:
             region_info = merged_regions_infos[region]
             region_chr = region_info['chr']
@@ -492,6 +517,8 @@ def make_guide_region_assignments(merged_regions, merged_regions_infos, guide_fi
             guide_id = 'NA'
             guide_name = 'NA'
             guide_seq = 'NA'
+            guide_chr = 'NA'
+            guide_pos = 'NA'
             this_guide_match_count = len(all_region_matches[region])
             if region in all_region_matches:
                 if region in region_matches:
@@ -499,14 +526,16 @@ def make_guide_region_assignments(merged_regions, merged_regions_infos, guide_fi
                     guide_id = region_matches[region][0] # the assigned guides that matched to this region
                     guide_seq = guide_df.loc[guide_df['guide_id'] == guide_id, 'guide_seq_no_gaps'].values[0] # no pam (for CRISPResso)
                     guide_name = guide_df.loc[guide_df['guide_id'] == guide_id, 'guide_name'].values[0]
-                    this_region_name = region_name + "_" + guide_name
-                    cout.write("\t".join([this_region_name,region_seq,guide_seq]) + '\n')
+                    guide_chr = guide_df.loc[guide_df['guide_id'] == guide_id, 'guide_chr'].values[0]
+                    guide_pos = guide_df.loc[guide_df['guide_id'] == guide_id, 'guide_pos'].values[0]
+                    region_name = region_name + "_" + guide_name
+                    cout.write("\t".join([region_name,region_seq,guide_seq]) + '\n')
                     printed_crispresso_count += 1
                 else:
                     region_nomatch_count += 1
             else:
                 region_nomatch_count += 1
-            rout.write('\t'.join(str(x) for x in [this_region_name, region_chr, region_start, region_end, region_info['region_count'], region_seq, this_guide_match_count, guide_id, guide_name, guide_seq]) + '\n')
+            rout.write('\t'.join(str(x) for x in [region_name, region_chr, region_start, region_end, region_info['region_count'], region_seq, this_guide_match_count, guide_id, guide_name, guide_seq, guide_chr, guide_pos]) + '\n')
         
     print('Matched ' + str(region_match_count) + "/" + str(region_match_count + region_nomatch_count) + ' frequently-aligned locations to guides. Wrote region info to ' + all_region_output_file)
 
@@ -548,8 +577,21 @@ def run_crispresso_with_assigned_regions(experiment_name, fastq_r1, fastq_r2, ge
     command = 'CRISPRessoPooled -f ' + crispresso_region_file + ' -x ' + genome_file + ' -n ' + experiment_name + ' ' + ' -r1 ' + fastq_r1 + r2_string + output_string + ' --min_reads_to_use_region 1 --default_min_aln_score 20 ' + \
                 ' --base_editor_output --quantification_window_center -10 --quantification_window_size 16' + \
                 ' -p ' + str(n_processors) + ' --no_rerun  --exclude_bp_from_left 0 --exclude_bp_from_right 0 --plot_window_size 10' + suppress_output_string
-    print('running command ' + str(command))
-    subprocess.run(command, shell=True, check=True)
+
+    crispresso_run_is_complete = False
+    if os.path.exists(CRISPResso_output_folder):
+        try:
+            crispresso_pooled_info = CRISPRessoShared.load_crispresso_info(crispresso_info_file_path=CRISPResso_output_folder + '/CRISPResso2Pooled_info.json')
+            if 'end_time' in crispresso_pooled_info['running_info']:
+                crispresso_run_is_complete = True
+                print('CRISPResso output already exists for sample ' + experiment_name + ', skipping CRISPResso run')
+        except:
+            pass
+
+    if not crispresso_run_is_complete:
+        print('Aligning reads to the genome to find amplicon locations')
+        print('Running command ' + str(command))
+        subprocess.run(command, shell=True, check=True)
 
     return CRISPResso_output_folder
 
