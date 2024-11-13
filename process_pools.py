@@ -483,19 +483,25 @@ def make_guide_region_assignments(merged_regions, merged_regions_infos, guide_fi
             if guide_seq_id in guide_matches:
                 guide_match_count += 1
                 matched_region_count = len(all_guide_matches[guide_seq_id])
+                matched_regions = ', '.join(all_guide_matches[guide_seq_id])
                 region_name = guide_matches[guide_seq_id]
                 region_info = merged_regions_infos[region_name]
                 region_chr = region_info['chr']
                 region_start = region_info['start']
                 region_end = region_info['end']
                 region_seq = region_info['seq']
-                fout.write('\t'.join([str(x) for x in [guide_seq_id, guide_seq_name, guide_seq, guide_seq_with_pam, guide_chr, guide_pos, matched_region_count, region_chr, region_start, region_end, region_info['region_count'], region_seq]]) + '\n')
+                fout.write('\t'.join([str(x) for x in [guide_seq_id, guide_seq_name, guide_seq, guide_seq_with_pam, guide_chr, guide_pos, matched_region_count, matched_regions, region_chr, region_start, region_end, region_info['region_count'], region_seq]]) + '\n')
                 guide_df.loc[guide_idx, 'matched_region_count'] = matched_region_count
                 guide_df.loc[guide_idx, 'matched_region'] = region_name
-
+            # if guide wasn't selected as the final match for a region, it will be in all_guide_matches
+            elif guide_seq_id in all_guide_matches:
+                guide_nomatch_count += 1
+                matched_region_count = len(all_guide_matches[guide_seq_id])
+                matched_regions = ', '.join(all_guide_matches[guide_seq_id])
+                fout.write('\t'.join([str(x) for x in [guide_seq_id, guide_seq_name, guide_seq, guide_seq_with_pam, guide_chr, guide_pos, 0, matched_regions, 'NA', 'NA', 'NA', 'NA', 'NA']]) + '\n')
             else:
                 guide_nomatch_count += 1
-                fout.write('\t'.join([str(x) for x in [guide_seq_id, guide_seq_name, guide_seq, guide_seq_with_pam, guide_chr, guide_pos, 0, 'NA', 'NA', 'NA', 'NA', 'NA']]) + '\n')
+                fout.write('\t'.join([str(x) for x in [guide_seq_id, guide_seq_name, guide_seq, guide_seq_with_pam, guide_chr, guide_pos, 0, 'NA', 'NA', 'NA', 'NA', 'NA', 'NA']]) + '\n')
 
     print('Matched ' + str(guide_match_count) + '/' + str(len(guide_df)) + ' guides to regions from read alignments. Wrote matches to ' + out_file)
 
@@ -506,7 +512,7 @@ def make_guide_region_assignments(merged_regions, merged_regions_infos, guide_fi
     region_nomatch_count = 0
     printed_crispresso_count = 0
     with open(all_region_output_file,'w') as rout, open(crispresso_output_file,'w') as cout:
-        rout.write('region_id\tchr\tstart\tend\tread_count\tseq\tguide_matches\tguide_id\tguide_name\tguide_seq\tguide_chr\tguide_pos\n')
+        rout.write('region_id\tchr\tstart\tend\tread_count\tseq\tguide_match_count\tguide_matches\tguide_id\tguide_name\tguide_seq\tguide_chr\tguide_pos\n')
         for region in merged_regions:
             region_info = merged_regions_infos[region]
             region_chr = region_info['chr']
@@ -520,6 +526,10 @@ def make_guide_region_assignments(merged_regions, merged_regions_infos, guide_fi
             guide_chr = 'NA'
             guide_pos = 'NA'
             this_guide_match_count = len(all_region_matches[region])
+            if this_guide_match_count > 0:
+                this_guide_matches = ', '.join(all_region_matches[region])
+            else:
+                this_guide_matches = 'NA'
             if region in all_region_matches:
                 if region in region_matches:
                     region_match_count += 1
@@ -535,7 +545,7 @@ def make_guide_region_assignments(merged_regions, merged_regions_infos, guide_fi
                     region_nomatch_count += 1
             else:
                 region_nomatch_count += 1
-            rout.write('\t'.join(str(x) for x in [region_name, region_chr, region_start, region_end, region_info['region_count'], region_seq, this_guide_match_count, guide_id, guide_name, guide_seq, guide_chr, guide_pos]) + '\n')
+            rout.write('\t'.join(str(x) for x in [region_name, region_chr, region_start, region_end, region_info['region_count'], region_seq, this_guide_match_count, this_guide_matches, guide_id, guide_name, guide_seq, guide_chr, guide_pos]) + '\n')
         
     print('Matched ' + str(region_match_count) + "/" + str(region_match_count + region_nomatch_count) + ' frequently-aligned locations to guides. Wrote region info to ' + all_region_output_file)
 
