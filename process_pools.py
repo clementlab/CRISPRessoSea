@@ -842,11 +842,6 @@ def plot_guides_and_heatmap(guide_plot_df, df_data, col_to_plot, df_data_title, 
     df_to_plot = df_data[cols_to_plot]
     df_to_plot.columns = [col.replace('_' + col_to_plot, '') for col in cols_to_plot]
 
-    print('here')
-    print(df_to_plot.dtypes)
-    print(df_to_plot)
-    print('done')
-
     # Create a custom color palette for the letters
     color_mapping = {'A': '#E3EFA9', 'T': '#CCCFE0', 'C': '#FBC6C6', 'G': '#FCE588', '.': '#F4F4F6', '-':'#BEC0C6', '+':'#BEC0C6', 'default': 'gray'}
     #color_mapping = {'A': '#90adc6', 'T': '#e9eaec', 'C': '#fad02c', 'G': '#333652', '.': '#c8df52', '-':'#F67E7D',  'default': 'gray'}
@@ -923,5 +918,5 @@ if __name__ == '__main__':
 
     main(sample_file=args.sample_file, guide_file=args.guide_file, genome_file=args.genome_file,
           output_folder=output_folder, n_processors=args.n_processes, skip_bad_chrs=args.skip_bad_chrs, 
-          plot_only_complete_guides=args.plot_only_complete_guides, min_amplion_coverage=args.min_amplicon_coverage)
+          plot_only_complete_guides=args.plot_only_complete_guides, min_amplicon_coverage=args.min_amplicon_coverage)
     print('Finished')
