@@ -1037,9 +1037,9 @@ def replot(reordered_guide_file, output_folder=None, file_prefix=None, name_colu
     elif file_prefix is not None:
         output_root = file_prefix + "."
     elif output_folder is not None:
-        output_root = output_folder + "/CRISPRessoOcean."
+        output_root = output_folder + "/CRISPRessoSea."
     else:
-        output_root = "CRISPRessoOcean."
+        output_root = "CRISPRessoSea."
     reordered_guide_df = pd.read_csv(reordered_guide_file, sep="\t")
     guide_plot_df = create_guide_df_for_plotting(reordered_guide_df)
 
@@ -1086,7 +1086,7 @@ if __name__ == '__main__':
 
     plot_parser = subparsers.add_parser('Replot', help='Replot completed analysis using reordered sample table')
     plot_parser.add_argument('-o', '--output_folder', help='Output folder', default=None)
-    plot_parser.add_argument('-p', '--file_prefix', help='File prefix for output files', default='CRISPRessoOcean')
+    plot_parser.add_argument('-p', '--file_prefix', help='File prefix for output files', default='CRISPRessoSea')
     plot_parser.add_argument('-f','--reordered_guide_file', help='Reordered guide file - made by reordering rows from aggregated_stats_all.txt', required=True)
     plot_parser.add_argument('-n','--name_column', help='Column name to set as the displayed name for each sample in the plot', default=None)
 
@@ -1100,7 +1100,7 @@ if __name__ == '__main__':
     elif args.subcommand == 'Process':
         output_folder = args.output_folder
         if output_folder is None:
-            output_folder = 'CRISPRessoOcean_output_on_' + os.path.basename(args.sample_file)
+            output_folder = 'CRISPRessoSea_output_on_' + os.path.basename(args.sample_file)
         if not output_folder.endswith('/'):
             output_folder += '/'
         os.makedirs(output_folder, exist_ok=True)

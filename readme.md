@@ -1,4 +1,4 @@
-# CRISPRessoOcean
+# CRISPRessoSea
 CRISPRessoOcean is a tool for processing genome editing from multiple amplicon sequencing experiments.
 
 The main program has two subcommands:
