@@ -474,6 +474,9 @@ def make_guide_region_assignments(merged_regions, merged_regions_infos, guide_fi
             if guide_chr == region_chr and guide_pos >= region_start and guide_pos <= region_end:
                 this_guide_region_matches.append(region) 
                 is_pos_match = True
+            elif guide_chr.replace('chr','') == region_chr.replace('chr','') and guide_pos >= region_start and guide_pos <= region_end:
+                this_guide_region_matches.append(region) 
+                is_pos_match = True
 
             if is_seq_match or is_pos_match:
                 all_guide_matches[guide_id].append(region)
@@ -938,7 +941,7 @@ def create_guide_df_for_plotting(guide_df):
     df_guides.index = guide_df['guide_id']
     return df_guides
 
-def plot_guides_and_heatmap(guide_plot_df, df_data, col_to_plot, df_data_title, df_data_heat_max=None, df_data_heat_min=None, outfile_name=None, fig_height=24, fig_width=24, guide_names=None):
+def plot_guides_and_heatmap(guide_plot_df, df_data, col_to_plot, df_data_title, df_data_heat_max=None, df_data_heat_min=None, outfile_name=None, fig_height=24, fig_width=24, guide_names=None, seq_plot_ratio=1):
     """
     Plot a heatmap of guide sequences (left) and the data (right)
     The plot of guide sequences will contain 
@@ -956,6 +959,7 @@ def plot_guides_and_heatmap(guide_plot_df, df_data, col_to_plot, df_data_title, 
     - fig_height: the height of the figure
     - fig_width: the width of the figure
     - guide_names: a list of guide names to use for the y-axis of the heatmap (if None, the index of guide_plot_df will be used)
+    - seq_plot_ratio: the ratio of the width of the guide sequence plot to the data plot (>1 means the seq plot is larger than the data plot)
 
     returns:
     - None
@@ -988,7 +992,7 @@ def plot_guides_and_heatmap(guide_plot_df, df_data, col_to_plot, df_data_title, 
 
     # Create the figure and gridspec
     fig = plt.figure(figsize=(fig_width, fig_height))
-    gs = fig.add_gridspec(2, 2, height_ratios=[10, 1], width_ratios=[1, 1], hspace=0, wspace=0.05)
+    gs = fig.add_gridspec(2, 2, height_ratios=[10, 1], width_ratios=[seq_plot_ratio, 1], hspace=0, wspace=0.05)
 
     # Create the first heatmap (guide_seqs and mismatches)
     ax1 = fig.add_subplot(gs[0, 0])
@@ -1028,7 +1032,19 @@ def plot_guides_and_heatmap(guide_plot_df, df_data, col_to_plot, df_data_title, 
 
     plt.close(fig)
 
-def replot(reordered_guide_file, output_folder=None, file_prefix=None, name_column=None):
+def replot(reordered_guide_file, output_folder=None, file_prefix=None, name_column=None, fig_height=24, fig_width=24, seq_plot_ratio=1):
+    """
+    Replot a completed analysis using a reordered guide file
+
+    params:
+    - reordered_guide_file: the reordered guide file based on (having the same columns and layout as) a previously-completed aggregated_stats_all.txt file
+    - output_folder: the output folder for the output plots
+    - file_prefix: the prefix for the output plots
+    - name_column: the column to use as the displayed name for each sample in the plot
+    - fig_height: the height of the figure
+    - fig_width: the width of the figure
+    - seq_plot_ratio: the ratio of the width of the guide sequence plot to the data plot (>1 means the seq plot is larger than the data plot)
+    """
 
     if output_folder is not None and file_prefix is not None:
         if not os.path.exists(output_folder):
@@ -1055,24 +1071,24 @@ def replot(reordered_guide_file, output_folder=None, file_prefix=None, name_colu
     col_to_plot = 'highest_a_g_pct'
     col_title = 'Highest A/G %'
     plot_suffix = 'highest_a_g_pct.pdf'
-    plot_guides_and_heatmap(guide_plot_df, reordered_guide_df, col_to_plot, col_title, outfile_name=output_root + plot_suffix)
+    plot_guides_and_heatmap(guide_plot_df, reordered_guide_df, col_to_plot, col_title, outfile_name=output_root + plot_suffix, fig_height=fig_height, fig_width=fig_width, seq_plot_ratio=seq_plot_ratio)
 
     col_to_plot = 'highest_c_t_pct'
     col_title = 'Highest C/T %'
     plot_suffix = 'highest_c_t_pct.pdf'
-    plot_guides_and_heatmap(guide_plot_df, reordered_guide_df, col_to_plot, col_title, outfile_name=output_root + plot_suffix)
+    plot_guides_and_heatmap(guide_plot_df, reordered_guide_df, col_to_plot, col_title, outfile_name=output_root + plot_suffix, fig_height=fig_height, fig_width=fig_width, seq_plot_ratio=seq_plot_ratio)
 
     col_to_plot = 'highest_indel_pct'
     col_title = 'Highest Indel %'
     plot_suffix = 'highest_indel_pct.pdf'
-    plot_guides_and_heatmap(guide_plot_df, reordered_guide_df, col_to_plot, col_title, outfile_name=output_root + plot_suffix)
+    plot_guides_and_heatmap(guide_plot_df, reordered_guide_df, col_to_plot, col_title, outfile_name=output_root + plot_suffix, fig_height=fig_height, fig_width=fig_width, seq_plot_ratio=seq_plot_ratio)
 
 
 # main entry point
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Process multiple pooled sequencing runs')
     subparsers = parser.add_subparsers(dest='subcommand', help='Process a new run or Replot a completed run')
-    process_parser = subparsers.add_parser('Process', help='Process a new set of samples')
+    process_parser = subparsers.add_parser('Process', help='Process a new set of samples', formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     process_parser.add_argument('-o', '--output_folder', help='Output folder', default=None)
     process_parser.add_argument('-g','--guide_file', help='Guide file - list of guides with one guide per line', required=True)
     process_parser.add_argument('-s', '--sample_file', help='Sample file - list of samples with one sample per line', required=True)
@@ -1084,18 +1100,21 @@ if __name__ == '__main__':
     process_parser.add_argument('--sort_based_on_mismatch', help='Sort guides based on mismatch count. If true, the on-target will always be first', action='store_true')
     process_parser.add_argument('--allow_guide_match_to_other_region_loc', help='If true, guides can match to regions even if the guide chr:start is not in that region (e.g. if the guide sequence is found in that region). If false/unset, guides can only match to regions matching the guide chr:start position. This flag should be set if the genome for guide design was not the same as the analysis genome.', action='store_true')
 
-    plot_parser = subparsers.add_parser('Replot', help='Replot completed analysis using reordered sample table')
+    plot_parser = subparsers.add_parser('Replot', help='Replot completed analysis using reordered sample table', formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     plot_parser.add_argument('-o', '--output_folder', help='Output folder', default=None)
     plot_parser.add_argument('-p', '--file_prefix', help='File prefix for output files', default='CRISPRessoSea')
     plot_parser.add_argument('-f','--reordered_guide_file', help='Reordered guide file - made by reordering rows from aggregated_stats_all.txt', required=True)
     plot_parser.add_argument('-n','--name_column', help='Column name to set as the displayed name for each sample in the plot', default=None)
+    plot_parser.add_argument('--fig_width', help='Width of the figure', default=24, type=int)
+    plot_parser.add_argument('--fig_height', help='Height of the figure', default=24, type=int)
+    plot_parser.add_argument('--seq_plot_ratio', help='Ratio of the width of the sequence plot to the data plot (>1 means the seq plot is larger than the data plot)', default=1, type=float)
 
     args = parser.parse_args()
     
     if args.subcommand == 'Replot':
         if not os.path.isfile(args.reordered_guide_file):
             raise Exception('Reordered guide file is not found at "' + args.reordered_guide_file + '". Use an aggregated_stats_all.txt file from a previous run as a template.')
-        replot(args.reordered_guide_file, args.output_folder, args.file_prefix, args.name_column)
+        replot(args.reordered_guide_file, args.output_folder, args.file_prefix, name_column=args.name_column, fig_height=args.fig_height, fig_width=args.fig_width, seq_plot_ratio=args.seq_plot_ratio)
 
     elif args.subcommand == 'Process':
         output_folder = args.output_folder
