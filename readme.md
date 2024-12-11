@@ -16,26 +16,7 @@ The main program has two subcommands:
 ## Complete command description:
 ### Process
 ```
-usage: CRISPRessoSea.py Replot [-h] [-o OUTPUT_FOLDER] [-p FILE_PREFIX] -f REORDERED_GUIDE_FILE [-n NAME_COLUMN] [--fig_width FIG_WIDTH] [--fig_height FIG_HEIGHT] [--seq_plot_ratio SEQ_PLOT_RATIO]
-
-options:
-  -h, --help            show this help message and exit
-  -o OUTPUT_FOLDER, --output_folder OUTPUT_FOLDER
-                        Output folder (default: None)
-  -p FILE_PREFIX, --file_prefix FILE_PREFIX
-                        File prefix for output files (default: CRISPRessoSea)
-  -f REORDERED_GUIDE_FILE, --reordered_guide_file REORDERED_GUIDE_FILE
-                        Reordered guide file - made by reordering rows from aggregated_stats_all.txt (default: None)
-  -n NAME_COLUMN, --name_column NAME_COLUMN
-                        Column name to set as the displayed name for each sample in the plot (default: None)
-  --fig_width FIG_WIDTH
-                        Width of the figure (default: 24)
-  --fig_height FIG_HEIGHT
-                        Height of the figure (default: 24)
-  --seq_plot_ratio SEQ_PLOT_RATIO
-                        Ratio of the width of the sequence plot to the data plot (>1 means the seq plot is larger than the data plot) (default: 1)
-(kc_crispresso) [u0351481@notchpeak30:CRISPRessoSea]$ python CRISPRessoSea.py  Process -h
-usage: CRISPRessoSea.py Process [-h] [-o OUTPUT_FOLDER] -g GUIDE_FILE -s SAMPLE_FILE -x GENOME_FILE [-p N_PROCESSES] [--skip_bad_chrs] [--plot_only_complete_guides] [--min_amplicon_coverage MIN_AMPLICON_COVERAGE]
+usage: CRISPRessoSea.py Process [-h] [-o OUTPUT_FOLDER] -g GUIDE_FILE -s SAMPLE_FILE -x GENOME_FILE [-p N_PROCESSES] [--allow_unplaced_chrs] [--plot_only_complete_guides] [--min_amplicon_coverage MIN_AMPLICON_COVERAGE]
                                 [--sort_based_on_mismatch] [--allow_guide_match_to_other_region_loc]
 
 options:
@@ -50,7 +31,8 @@ options:
                         Bowtie2-indexed genome file - files ending in .bt2 must be present in the folder. (default: None)
   -p N_PROCESSES, --n_processes N_PROCESSES
                         Number of processes to use (default: 8)
-  --skip_bad_chrs       Skip regions on bad chromosomes (chrUn, random, etc) (default: False)
+  --allow_unplaced_chrs
+                        Allow regions on unplaced chromosomes (chrUn, random, etc). By default, regions on these chromosomes are excluded. If set, regions on these chromosomes will be included. (default: False)
   --plot_only_complete_guides
                         Plot only guides with all values. If not set, all guides will be plotted. (default: False)
   --min_amplicon_coverage MIN_AMPLICON_COVERAGE
@@ -58,8 +40,7 @@ options:
   --sort_based_on_mismatch
                         Sort guides based on mismatch count. If true, the on-target will always be first (default: False)
   --allow_guide_match_to_other_region_loc
-                        If true, guides can match to regions even if the guide chr:start is not in that region (e.g. if the guide sequence is found in that region). If false/unset, guides can only match to regions matching the
-                        guide chr:start position. This flag should be set if the genome for guide design was not the same as the analysis genome. (default: False)
+                        If true, guides can match to regions even if the guide chr:start is not in that region (e.g. if the guide sequence is found in that region). If false/unset, guides can only match to regions matching the guide chr:start position. This flag should be set if the genome for guide design was not the same as the analysis genome. (default: False)
 ```
 
 ### Replot

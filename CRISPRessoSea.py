@@ -17,7 +17,7 @@ from CRISPResso2 import CRISPResso2Align
 import matplotlib as mpl
 mpl.rcParams['pdf.fonttype'] = 42
 
-def process_pools(sample_file, guide_file, genome_file, output_folder, n_processors=8, skip_bad_chrs=True, plot_only_complete_guides=False, 
+def process_pools(sample_file, guide_file, genome_file, output_folder, n_processors=8, allow_unplaced_chrs=False, plot_only_complete_guides=False, 
                   min_amplicon_coverage=100, sort_based_on_mismatch=False, allow_guide_match_to_other_region_loc=False):
     """
     Discover amplicons and analyze sample editing at amplicons. This is the main entrypoint for this program.
@@ -28,7 +28,7 @@ def process_pools(sample_file, guide_file, genome_file, output_folder, n_process
     - genome_file: path to the genome file (not including the trailing .fa)
     - output_folder: path to the output folder to produce data
     - n_processors: number of processors to use for multiprocessing
-    - skip_bad_chrs: whether to skip regions on bad chromosomes (chrUn, random, etc)
+    - allow_unplaced_chrs: whether to allow regions to be identified on unplaced chromosomes (chrUn, random, etc). If true, these regions will be included.
     - plot_only_complete_guides: whether to plot only guides with data in all samples
     - min_amplicon_coverage: the minimum number of reads required to consider an amplicon
     - sort_based_on_mismatch: if true, guides are sorted based on mismatch count. If false, guides are presented in the order they are in the file
@@ -77,7 +77,7 @@ def process_pools(sample_file, guide_file, genome_file, output_folder, n_process
         os.makedirs(crispresso_output_folder, exist_ok=True)
 
     # first, run CRISPResso on the first sample to get the amplicon regions
-    merged_regions, merged_regions_infos = run_initial_demux(first_sample_name, first_sample_r1, first_sample_r2, genome_file, output_folder=crispresso_output_folder, n_processors=n_processors, skip_bad_chrs=skip_bad_chrs)
+    merged_regions, merged_regions_infos = run_initial_demux(first_sample_name, first_sample_r1, first_sample_r2, genome_file, output_folder=crispresso_output_folder, n_processors=n_processors, allow_unplaced_chrs=allow_unplaced_chrs)
     crispresso_region_file, guide_df, region_df = make_guide_region_assignments(merged_regions, merged_regions_infos, guide_file, output_folder, genome_file,
                                                                                 sort_based_on_mismatch, allow_guide_match_to_other_region_loc=allow_guide_match_to_other_region_loc)
 
@@ -146,14 +146,14 @@ def reverse_complement(seq):
     complement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A', 'N': 'N', 'a': 't', 'c': 'g', 'g': 'c', 't': 'a', 'n': 'n'}
     return "".join(complement[base] for base in reversed(seq))
 
-def merge_locations(crispresso_pooled_genome_folder, genome_file, skip_bad_chrs=True, min_amplicon_len=50, debug=False):
+def merge_locations(crispresso_pooled_genome_folder, genome_file, allow_unplaced_chrs=False, min_amplicon_len=50, debug=False):
     """
     Merge locations from a CRISPRessoPooled run to get a list of non-overlapping regions that could represent the original amplicons
 
     params:
     - crispresso_pooled_genome_folder: the folder containing the CRISPRessoPooled output
     - genome_file: path to the genome file
-    - skip_bad_chrs: whether to skip regions on bad chromosomes (chrUn, random, etc)
+    - allow_unplaced_chrs: whether to allow regions on unplaced chromosomes (chrUn, random, etc). If true, these regions will be included.
     - min_amplicon_len: the minimum length of an amplicon to consider
     - debug: whether to print debug information
 
@@ -190,7 +190,7 @@ def merge_locations(crispresso_pooled_genome_folder, genome_file, skip_bad_chrs=
 
         region_info[region_name] = {'chr': region_chr, 'start': region_start, 'end': region_end, 'region_count': region_count, 'seq': region_seq}
         
-        if skip_bad_chrs:
+        if not allow_unplaced_chrs:
             if 'chrUn' in region_chr or 'random' in region_chr:
                 continue
         region_len = region_end - region_start
@@ -237,7 +237,7 @@ def merge_locations(crispresso_pooled_genome_folder, genome_file, skip_bad_chrs=
         good_nonoverlapping_region_infos[region] = this_region_info
     return good_nonoverlapping_regions, good_nonoverlapping_region_infos
 
-def run_initial_demux(experiment_name, fastq_r1, fastq_r2, genome_file, output_folder='', n_processors=8, skip_bad_chrs=True, suppress_output=True):
+def run_initial_demux(experiment_name, fastq_r1, fastq_r2, genome_file, output_folder='', n_processors=8, allow_unplaced_chrs=False, suppress_output=True):
     """
     Run CRISPResso on input reads to determine which regions are frequently aligned to
 
@@ -248,7 +248,7 @@ def run_initial_demux(experiment_name, fastq_r1, fastq_r2, genome_file, output_f
     - genome_file: path to the genome file
     - output_folder: path to the output folder where results should be written
     - n_processors: number of processors to use
-    - skip_bad_chrs: whether to skip regions on bad chromosomes (chrUn, random, etc)
+    - allow_unplaced_chrs: whether to allow regions on bad chromosomes (chrUn, random, etc). If true, these regions will be included.
 
     returns:
     - list of merged regions
@@ -282,7 +282,7 @@ def run_initial_demux(experiment_name, fastq_r1, fastq_r2, genome_file, output_f
         print('Running command ' + str(command))
         subprocess.run(command, shell=True, check=True)
 
-    merged_regions, merged_regions_infos = merge_locations(CRISPResso_output_folder, genome_file, skip_bad_chrs=skip_bad_chrs)
+    merged_regions, merged_regions_infos = merge_locations(CRISPResso_output_folder, genome_file, allow_unplaced_chrs=allow_unplaced_chrs)
 
     return merged_regions, merged_regions_infos
 
@@ -1094,7 +1094,7 @@ if __name__ == '__main__':
     process_parser.add_argument('-s', '--sample_file', help='Sample file - list of samples with one sample per line', required=True)
     process_parser.add_argument('-x', '--genome_file', help='Bowtie2-indexed genome file - files ending in .bt2 must be present in the folder.', required=True)
     process_parser.add_argument('-p', '--n_processes', help='Number of processes to use', type=int, default=8)
-    process_parser.add_argument('--skip_bad_chrs', help='Skip regions on bad chromosomes (chrUn, random, etc)', action='store_true')
+    process_parser.add_argument('--allow_unplaced_chrs', help='Allow regions on unplaced chromosomes (chrUn, random, etc). By default, regions on these chromosomes are excluded. If set, regions on these chromosomes will be included.', action='store_true')
     process_parser.add_argument('--plot_only_complete_guides', help='Plot only guides with all values. If not set, all guides will be plotted.', action='store_true')
     process_parser.add_argument('--min_amplicon_coverage', help='Minimum number of reads to cover a location for it to be plotted. Otherwise, it will be set as NA', default=10, type=int)
     process_parser.add_argument('--sort_based_on_mismatch', help='Sort guides based on mismatch count. If true, the on-target will always be first', action='store_true')
@@ -1131,7 +1131,7 @@ if __name__ == '__main__':
             raise Exception('Guide file not found at ' + args.guide_file)
 
         process_pools(sample_file=args.sample_file, guide_file=args.guide_file, genome_file=args.genome_file,
-            output_folder=output_folder, n_processors=args.n_processes, skip_bad_chrs=args.skip_bad_chrs, 
+            output_folder=output_folder, n_processors=args.n_processes, allow_unplaced_chrs=args.allow_unplaced_chrs, 
             plot_only_complete_guides=args.plot_only_complete_guides, min_amplicon_coverage=args.min_amplicon_coverage,
             sort_based_on_mismatch=args.sort_based_on_mismatch, allow_guide_match_to_other_region_loc=args.allow_guide_match_to_other_region_loc)
     else:
