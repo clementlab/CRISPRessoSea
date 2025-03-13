@@ -35,68 +35,6 @@ debug = logger.debug
 info = logger.info
 
 
-class SigEditingSettings:
-    def __init__(
-        self,
-        threshold_cutoff=None,
-        difference_cutoff=None,
-        neg_binomial_pvalue_cutoff=None,
-    ):
-        """
-        Initialize the SigEditingSettings object
-
-        Args:
-            threshold_cutoff (float): Value cutoff for significant editing
-            difference_cutoff (float): Difference cutoff (between groups) for calling significant editing
-            neg_binomial_pvalue_cutoff (float): Negative binomial p-value cutoff for calling significant editing
-
-        """
-        self.threshold_cutoff = threshold_cutoff
-        self.difference_cutoff = difference_cutoff
-        self.neg_binomial_pvalue_cutoff = neg_binomial_pvalue_cutoff
-
-
-class PlotFormatSettings:
-    def __init__(
-        self,
-        fig_width=24,
-        fig_height=24,
-        seq_plot_ratio=1,
-        title_fontsize=30,
-        y_tick_fontsize=16,
-        x_tick_fontsize=16,
-        nucleotide_fontsize=14,
-        legend_title_fontsize=20,
-        legend_ncol=None,
-        plot_only_complete_guides=False,
-    ):
-        """
-        Initialize the PlotFormatSettings object
-
-        Args:
-            fig_width (int): Width of the figure
-            fig_height (int): Height of the figure
-            seq_plot_ratio (float): Ratio of the width of the sequence plot to the data plot (>1 means the seq plot is larger than the data plot)
-            title_fontsize (int): Fontsize of the plot titles
-            y_tick_fontsize (int): Fontsize of the y-axis tick labels
-            x_tick_fontsize (int): Fontsize of the x-axis tick labels
-            nucleotide_fontsize (int): Fontsize of the nucleotide labels
-            legend_title_fontsize (int): Fontsize of the legend title
-            legend_ncol (int): Number of columns in the legend
-            plot_only_complete_guides (bool): Plot only guides with all values. If not set, all guides will be plotted.
-        """
-        self.fig_width = fig_width
-        self.fig_height = fig_height
-        self.seq_plot_ratio = seq_plot_ratio
-        self.title_fontsize = title_fontsize
-        self.y_tick_fontsize = y_tick_fontsize
-        self.x_tick_fontsize = x_tick_fontsize
-        self.nucleotide_fontsize = nucleotide_fontsize
-        self.legend_title_fontsize = legend_title_fontsize
-        self.legend_ncol = legend_ncol
-        self.plot_only_complete_guides = plot_only_complete_guides
-
-
 def process_pools(
     sample_file,
     guide_file,
@@ -109,8 +47,6 @@ def process_pools(
     min_amplicon_coverage=100,
     sort_based_on_mismatch=False,
     allow_guide_match_to_other_region_loc=False,
-    plot_format_settings: PlotFormatSettings = PlotFormatSettings(),
-    sig_editing_settings: SigEditingSettings = SigEditingSettings(),
 ):
     """
     Discover amplicons and analyze sample editing at amplicons. This is the main entrypoint for this program.
@@ -348,15 +284,13 @@ def process_pools(
     )
 
     crispresso2_info = create_plots(
-        data_df=aggregated_stats_good,
-        sample_df=sample_df,
-        guide_plot_df=guide_plot_df,
-        groups=groups,
-        output_folder=output_folder,
-        file_prefix=None,
-        crispresso2_info=crispresso2_info,
-        plot_format_settings=plot_format_settings,
-        sig_editing_settings=sig_editing_settings,
+        aggregated_stats_good,
+        sample_df,
+        guide_plot_df,
+        groups,
+        output_folder,
+        None,
+        crispresso2_info,
     )
     # Update crispresso2_info fields that depend on sample_df
     crispresso2_info["results"]["samples"] = [
@@ -396,11 +330,8 @@ def get_jinja_loader(root, logger):
     Get the Jinja2 environment for rendering templates.
     """
     undefined_logger = make_logging_undefined(logger=logger)
-    template_folder_path = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "templates")
-    )
     return Environment(
-        loader=FileSystemLoader(template_folder_path),
+        loader=FileSystemLoader(os.path.realpath("templates")),
         undefined=undefined_logger,
     )
 
@@ -2025,29 +1956,43 @@ def create_plots(
     output_folder,
     file_prefix="CRISPRessoSea",
     crispresso2_info=None,
-    plot_format_settings: PlotFormatSettings = PlotFormatSettings(),
-    sig_editing_settings: SigEditingSettings = SigEditingSettings(),
+    heatmap_fig_height=24,
+    heatmap_fig_width=24,
+    heatmap_seq_plot_ratio=1,
+    heatmap_title_fontsize=30,
+    heatmap_y_tick_fontsize=16,
+    heatmap_x_tick_fontsize=16,
+    heatmap_nucleotide_fontsize=14,
+    heatmap_legend_fontsize=20,
+    heatmap_legend_ncol=None,
 ):
     """_summary_
 
     Args:
-        data_df (pd.DataFrame): dataframe with data to plot
-        sample_df (pd.DataFrame): data
-        guide_plot_df (pd.DataFrame):
-        groups (list): list of groups for each sample
-        output_folder (str): output folder for plots
-        file_prefix (str, optional): File prefix for plot filenames. Defaults to "CRISPRessoSea".
-        crispresso2_info (dict, optional): Information about the CRISPRessoSea run
-        plot_format_settings (PlotFormatSettings, optional): Plotting settings
+        data_df (_type_): _description_
+        sample_df (_type_): _description_
+        guide_plot_df (_type_): _description_
+        groups (_type_): _description_
+        output_folder (_type_): _description_
+        file_prefix (str, optional): _description_. Defaults to "CRISPRessoSea".
+        crispresso2_info (_type_, optional): _description_. (Defaults to None)
+        heatmap_fig_height (int, optional): the height of the heatmap figure (Defaults to 24)
+        heatmap_fig_width (int, optional): the width of the heatmap figure (Defaults to 24)
+        heatmap_seq_plot_ratio (int, optional): the ratio of the width of the guide sequence plot to the data plot (>1 means the seq plot is larger than the data plot) (Defaults to 1)
+        heatmap_title_fontsize (int, optional): the fontsize of the plot titles for the heatmap (Defaults to 30)
+        heatmap_y_tick_fontsize (int, optional): the fontsize of the y-axis tick labels for the heatmap (Defaults to 16)
+        heatmap_x_tick_fontsize (int, optional): the fontsize of the x-axis tick labels for the heatmap (Defaults to 16)
+        heatmap_nucleotide_fontsize (int, optional): the fontsize of the nucleotide labels in the heatmap(Defaults to 14)
+        heatmap_legend_fontsize (int, optional): the fontsize of the legend title (Defaults to 20)
+        heatmap_legend_ncol (int, optional): the number of columns in the legend (if None, each value legend value will have a columns)
 
     Returns:
-        CRISPResso2_info (dict): Updated CRISPResso2 info with plot names and titles
+        _type_: _description_
     """
-
     sample_df_copy = sample_df[["Name", "group"]].copy()
     gene_annotations = data_df["region_anno"].tolist()
-    all_groups = ["all"] + groups
-    for group in all_groups:
+
+    for group in ["all", *groups]:
         plot_details = [
             {
                 "col_to_plot": "highest_a_g_pct",
@@ -2117,18 +2062,15 @@ def create_plots(
                 col_title,
                 row_annotations=gene_annotations,
                 outfile_name=os.path.join(output_folder, file_name),
-                fig_height=plot_format_settings.fig_height,
-                fig_width=plot_format_settings.fig_width,
-                seq_plot_ratio=plot_format_settings.seq_plot_ratio,
-                title_fontsize=plot_format_settings.title_fontsize,
-                y_tick_fontsize=plot_format_settings.y_tick_fontsize,
-                x_tick_fontsize=plot_format_settings.x_tick_fontsize,
-                nucleotide_fontsize=plot_format_settings.nucleotide_fontsize,
-                legend_title_fontsize=plot_format_settings.legend_title_fontsize,
-                legend_ncol=plot_format_settings.legend_ncol,
-                sig_editing_threshold_cutoff=sig_editing_settings.threshold_cutoff,
-                sig_editing_difference_cutoff=sig_editing_settings.difference_cutoff,
-                sig_neg_binomial_pvalue_cutoff=sig_editing_settings.neg_binomial_pvalue_cutoff,
+                fig_height=heatmap_fig_height,
+                fig_width=heatmap_fig_width,
+                seq_plot_ratio=heatmap_seq_plot_ratio,
+                title_fontsize=heatmap_title_fontsize,
+                y_tick_fontsize=heatmap_y_tick_fontsize,
+                x_tick_fontsize=heatmap_x_tick_fontsize,
+                nucleotide_fontsize=heatmap_nucleotide_fontsize,
+                legend_title_fontsize=heatmap_legend_fontsize,
+                legend_ncol=heatmap_legend_ncol,
             )
             if group == "all":
                 # Plotting for each DataFrame
@@ -2243,30 +2185,24 @@ def plot_dot_plot(df, value_suffix, file_prefix, sample_df_copy, output_folder):
         plt.close()
 
 
-def identify_significant_guides(
-    sig_editing_threshold_cutoff,
-    sig_editing_difference_cutoff,
-    sig_neg_binomial_pvalue_cutoff,
-    df_data,
-):
+class SigMethod(Enum):
+    HARD_CUTOFF = 1
+    NEG_BINOMIAL = 2
+    T_TEST = 3
+
+
+def identify_significant_guides(method, df_data):
     """
     TODO: Implement this function
-    sig_editing_threshold_cutoff (float, optional): the cutoff for the editing threshold (Defaults to None)
-    sig_editing_difference_cutoff (float, optional): the cutoff for the editing difference between the positive and negative groups (Defaults to None)
-    sig_neg_binomial_pvalue_cutoff (float, optional): the cutoff for the negative binomial p-value (Defaults to None)
+    Method 1: Using a hard cutoff
+    Method 2: Use Negative Binomial distribution to model the data
+    Method 3: USe biological groupings to identify significant guides using a t-test
     """
-    if (
-        sig_editing_threshold_cutoff is None
-        and sig_editing_difference_cutoff is None
-        and sig_neg_binomial_pvalue_cutoff is None
-    ):
-        return df_data.applymap(lambda x: False)
-
-    if sig_editing_threshold_cutoff is not None:
-        df_data = df_data > sig_editing_threshold_cutoff
-    elif sig_neg_binomial_pvalue_cutoff:
+    if method == SigMethod.HARD_CUTOFF:
+        df_data = df_data > 0.1
+    elif method == SigMethod.NEG_BINOMIAL:
         pass
-    elif sig_editing_difference_cutoff:
+    elif method == SigMethod.T_TEST:
         pass
 
     return df_data
@@ -2291,9 +2227,6 @@ def plot_guides_and_heatmap(
     nucleotide_fontsize=14,  # 12
     legend_title_fontsize=20,  # 18
     legend_ncol=None,
-    sig_editing_threshold_cutoff=None,
-    sig_editing_difference_cutoff=None,
-    sig_neg_binomial_pvalue_cutoff=None,
 ):
     """
     Plot a heatmap of guide sequences (left) and the data (right)
@@ -2336,9 +2269,7 @@ def plot_guides_and_heatmap(
     df_to_plot.columns = [col.replace("_" + col_to_plot, "") for col in cols_to_plot]
 
     df_sig = identify_significant_guides(
-        sig_editing_threshold_cutoff,
-        sig_editing_difference_cutoff,
-        sig_neg_binomial_pvalue_cutoff,
+        SigMethod.HARD_CUTOFF,
         df_to_plot,
     )
 
@@ -2606,15 +2537,22 @@ def replot(
     output_folder=None,
     file_prefix=None,
     name_column=None,
-    plot_format_settings: PlotFormatSettings = PlotFormatSettings(),
-    sig_editing_settings: SigEditingSettings = SigEditingSettings(),
+    fig_height=24,
+    fig_width=24,
+    seq_plot_ratio=1,
+    title_fontsize=30,
+    y_tick_fontsize=16,  # 16
+    x_tick_fontsize=16,  # 16
+    nucleotide_fontsize=14,  # 12
+    legend_title_fontsize=20,  # 18
+    legend_ncol=None,
 ):
     """
     Replot a completed analysis using a reordered guide file
 
     params:
     - reordered_guide_file: the reordered guide file based on (having the same columns and layout as) a previously-completed aggregated_stats_all.txt file
-    - reordered_sample_file: path to the reordered sample file with headers: Name, group, fastq_r1, fastq_r2 (group is always optional, fastq_r2 is optional for single-end reads)
+    - reordered_sample_file: path to the sample file with headers: Name, group, fastq_r1, fastq_r2 (group is always optional, fastq_r2 is optional for single-end reads)
     - output_folder: the output folder for the output plots
     - file_prefix: the prefix for the output plots
     - name_column: the column to use as the displayed name for each sample in the plot
@@ -2694,14 +2632,21 @@ def replot(
     reordered_guide_df = reordered_guide_df[reordered_cols]
 
     create_plots(
-        data_df=reordered_guide_df,
-        sample_df=sample_df,
-        guide_plot_df=guide_plot_df,
-        groups=groups,
-        output_folder=output_folder,
-        file_prefix=file_prefix,
-        plot_format_settings=plot_format_settings,
-        sig_editing_settings=sig_editing_settings,
+        reordered_guide_df,
+        sample_df,
+        guide_plot_df,
+        groups,
+        output_folder,
+        file_prefix,
+        heatmap_fig_height=fig_height,
+        heatmap_fig_width=fig_width,
+        heatmap_seq_plot_ratio=seq_plot_ratio,
+        heatmap_title_fontsize=title_fontsize,
+        heatmap_y_tick_fontsize=y_tick_fontsize,
+        heatmap_x_tick_fontsize=x_tick_fontsize,
+        heatmap_nucleotide_fontsize=nucleotide_fontsize,
+        heatmap_legend_fontsize=legend_title_fontsize,
+        heatmap_legend_ncol=legend_ncol,
     )
 
 
@@ -2710,98 +2655,27 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Process multiple pooled sequencing runs"
     )
-
-    # arguments common to all subparsers
-    parent_parser = argparse.ArgumentParser(add_help=False)
-    parent_parser.add_argument(
-        "-s",
-        "--sample_file",
-        help="Sample file - list of samples with one sample per line",
-        required=True,
-    )
-    parent_parser.add_argument(
-        "-o", "--output_folder", help="Output folder", default=None
-    )
-    parent_parser.add_argument(
-        "--fig_width", help="Width of the figure", default=24, type=int
-    )
-    parent_parser.add_argument(
-        "--fig_height", help="Height of the figure", default=24, type=int
-    )
-    parent_parser.add_argument(
-        "--seq_plot_ratio",
-        help="Ratio of the width of the sequence plot to the data plot (>1 means the seq plot is larger than the data plot)",
-        default=1,
-        type=float,
-    )
-    parent_parser.add_argument(
-        "--title_fontsize", help="Fontsize of the plot titles", default=30, type=int
-    )
-    parent_parser.add_argument(
-        "--y_tick_fontsize",
-        help="Fontsize of the y-axis tick labels",
-        default=16,
-        type=int,
-    )
-    parent_parser.add_argument(
-        "--x_tick_fontsize",
-        help="Fontsize of the x-axis tick labels",
-        default=16,
-        type=int,
-    )
-    parent_parser.add_argument(
-        "--nucleotide_fontsize",
-        help="Fontsize of the nucleotide labels",
-        default=14,
-        type=int,
-    )
-    parent_parser.add_argument(
-        "--legend_title_fontsize",
-        help="Fontsize of the legend title",
-        default=20,
-        type=int,
-    )
-    parent_parser.add_argument(
-        "--legend_ncol", help="Number of columns in the legend", default=None, type=int
-    )
-    parent_parser.add_argument(
-        "--plot_only_complete_guides",
-        help="Plot only guides with all values. If not set, all guides will be plotted.",
-        action="store_true",
-    )
-    parent_parser.add_argument(
-        "--threshold_cutoff",
-        help="Value cutoff for significant editing",
-        default=None,
-        type=float,
-    )
-    parent_parser.add_argument(
-        "--sig_editing_difference_cutoff",
-        help="Difference cutoff (between groups) for calling significant editing",
-        default=None,
-        type=float,
-    )
-    parent_parser.add_argument(
-        "--sig_editing_neg_binomial_pvalue_cutoff",
-        help="Negative binomial p-value cutoff for calling significant editing",
-        default=None,
-        type=float,
-    )
-
     subparsers = parser.add_subparsers(
         dest="subcommand", help="Process a new run or Replot a completed run"
     )
-
     process_parser = subparsers.add_parser(
         "Process",
         help="Process a new set of samples",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-        parents=[parent_parser],
+    )
+    process_parser.add_argument(
+        "-o", "--output_folder", help="Output folder", default=None
     )
     process_parser.add_argument(
         "-g",
         "--guide_file",
         help="Guide file - list of guides with one guide per line",
+        required=True,
+    )
+    process_parser.add_argument(
+        "-s",
+        "--sample_file",
+        help="Sample file - list of samples with one sample per line",
         required=True,
     )
     process_parser.add_argument(
@@ -2828,6 +2702,11 @@ if __name__ == "__main__":
         action="store_true",
     )
     process_parser.add_argument(
+        "--plot_only_complete_guides",
+        help="Plot only guides with all values. If not set, all guides will be plotted.",
+        action="store_true",
+    )
+    process_parser.add_argument(
         "--min_amplicon_coverage",
         help="Minimum number of reads to cover a location for it to be plotted. Otherwise, it will be set as NA",
         default=10,
@@ -2848,7 +2727,9 @@ if __name__ == "__main__":
         "Replot",
         help="Replot completed analysis using reordered sample table",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-        parents=[parent_parser],
+    )
+    plot_parser.add_argument(
+        "-o", "--output_folder", help="Output folder", default=None
     )
     plot_parser.add_argument(
         "-p",
@@ -2868,27 +2749,20 @@ if __name__ == "__main__":
         help="Column name to set as the displayed name for each sample in the plot",
         default=None,
     )
+    plot_parser.add_argument(
+        "--fig_width", help="Width of the figure", default=24, type=int
+    )
+    plot_parser.add_argument(
+        "--fig_height", help="Height of the figure", default=24, type=int
+    )
+    plot_parser.add_argument(
+        "--seq_plot_ratio",
+        help="Ratio of the width of the sequence plot to the data plot (>1 means the seq plot is larger than the data plot)",
+        default=1,
+        type=float,
+    )
 
     args = parser.parse_args()
-
-    # Create a PlotFormatSettings object
-    plot_format_settings = PlotFormatSettings(
-        fig_width=args.fig_width,
-        fig_height=args.fig_height,
-        seq_plot_ratio=args.seq_plot_ratio,
-        title_fontsize=args.title_fontsize,
-        y_tick_fontsize=args.y_tick_fontsize,
-        x_tick_fontsize=args.x_tick_fontsize,
-        nucleotide_fontsize=args.nucleotide_fontsize,
-        legend_title_fontsize=args.legend_title_fontsize,
-        legend_ncol=args.legend_ncol,
-        plot_only_complete_guides=args.plot_only_complete_guides,
-    )
-    sig_editing_settings = SigEditingSettings(
-        threshold_cutoff=args.threshold_cutoff,
-        difference_cutoff=args.sig_editing_difference_cutoff,
-        neg_binomial_pvalue_cutoff=args.sig_editing_neg_binomial_pvalue_cutoff,
-    )
 
     if args.subcommand == "Replot":
         if not os.path.isfile(args.reordered_guide_file):
@@ -2907,8 +2781,9 @@ if __name__ == "__main__":
             args.output_folder,
             args.file_prefix,
             name_column=args.name_column,
-            plot_format_settings=plot_format_settings,
-            sig_editing_settings=sig_editing_settings,
+            fig_height=args.fig_height,
+            fig_width=args.fig_width,
+            seq_plot_ratio=args.seq_plot_ratio,
         )
 
     elif args.subcommand == "Process":
@@ -2954,8 +2829,6 @@ if __name__ == "__main__":
             min_amplicon_coverage=args.min_amplicon_coverage,
             sort_based_on_mismatch=args.sort_based_on_mismatch,
             allow_guide_match_to_other_region_loc=args.allow_guide_match_to_other_region_loc,
-            plot_format_settings=plot_format_settings,
-            sig_editing_settings=sig_editing_settings,
         )
     else:
         raise Exception(
