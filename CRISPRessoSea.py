@@ -20,10 +20,9 @@ from matplotlib.colors import ListedColormap
 
 mpl.rcParams["pdf.fonttype"] = 42
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 C2PRO_INSTALLED = False
-
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -36,24 +35,33 @@ info = logger.info
 
 
 def process_pools(
+    args,
     sample_file,
     guide_file,
     genome_file,
     output_folder,
     gene_annotations=None,
     n_processors=8,
+    crispresso_quantification_window_center=-3,
+    crispresso_quantification_window_size=1,
+    crispresso_base_editor_output=False,
+    crispresso_default_min_aln_score=20,
+    crispresso_plot_window_size=20,
     allow_unplaced_chrs=False,
     plot_only_complete_guides=False,
     min_amplicon_coverage=100,
     sort_based_on_mismatch=False,
     allow_guide_match_to_other_region_loc=False,
+    top_percent_cutoff=0.2,
+    min_amplicon_len=50,
+    fail_on_pooled_fail=False,
 ):
     """
     Discover amplicons and analyze sample editing at amplicons. This is the main entrypoint for this program.
 
     params:
     - sample_file: path to the sample file with headers: Name, group, fastq_r1, fastq_r2 (group is always optional, fastq_r2 is optional for single-end reads)
-    - guide_file: path to the guide file with headers: Name, Sequence, PAM, Score, #MM, Gene, Locus
+    - guide_file: path to the guide file with headers: Name, Sequence, PAM, #MM, Locus (may include other columns)
     - genome_file: path to the genome file (not including the trailing .fa)
     - output_folder: path to the output folder to produce data
     - gene_annotations: the path to the gene annotations file. This function expects a column for:
@@ -62,30 +70,38 @@ def process_pools(
         end ('txEnd', 'end', or 'End'), and
         gene name ('name' and/or 'name2')
     - n_processors: number of processors to use for multiprocessing
+    - crispresso_quantification_window_center: the window to use for CRISPResso2 quantification. This will be used for CRISPResso2 subruns and corresponds to the parameter --quantification_window_center. If None, the default value of -3 will be used.
+    - crispresso_quantification_window_size: the window size to use for CRISPResso2 quantification. This will be used for CRISPResso2 subruns and corresponds to the parameter --quantification_window_size. If None, the default value of 1 will be used.
+    - crispresso_base_editor_output: whether to output base editor plots. If True, base editor plots will be output. If False, base editor plots will not be output.
+    - crispresso_default_min_aln_score: the minimum alignment score to use for CRISPResso2. This will be used for CRISPResso2 subruns and corresponds to the parameter --default_min_aln_score. If None, the default value of 20 will be used.
+    - crispresso_plot_window_size: the window size to use for CRISPResso2 plots. This will be used for CRISPResso2 subruns and corresponds to the parameter --plot_window_size. If None, the default value of 20 will be used.
     - allow_unplaced_chrs: whether to allow regions to be identified on unplaced chromosomes (chrUn, random, etc).
     - plot_only_complete_guides: whether to plot only guides with data in all samples
     - min_amplicon_coverage: the minimum number of reads required to consider an amplicon
     - sort_based_on_mismatch: if true, guides are sorted based on mismatch count. If false, guides are presented in file order
     - allow_guide_match_to_other_region_loc: if true, guides can match regions based on sequence even if not in the same pos.
+    - top_percent_cutoff: the top percent of aligned regions (by region read depth) to consider in finding non-overlapping regions. This is a float between 0 and 1. For example, if set to 0.2, the top 20% of regions (by read depth) will be considered.
+    - min_amplicon_len: the minimum length of an amplicon to consider in finding non-overlapping regions. Amplicons shorter than this will be ignored.
+    - fail_on_pooled_fail: if true, fail if any pooled CRISPResso run fails. Otherwise, continue even if sub-CRISPResso commands fail.
     """
 
     log_filename = os.path.join(output_folder, "CRISPRessoSea_RUNNING_LOG.txt")
     logger.addHandler(logging.FileHandler(log_filename))
     status_handler = CRISPRessoShared.StatusHandler(
-        os.path.join(output_folder, "CRISPRessoBatch_status.json")
+        os.path.join(output_folder, "CRISPRessoSea_status.json")
     )
     logger.addHandler(status_handler)
 
     with open(log_filename, "w+") as outfile:
         outfile.write("[Command used]:\n%s\n\n[Execution log]:\n" % " ".join(sys.argv))
 
-    crispressoSea_info_file = os.path.join(output_folder, "CRISPResso2Batch_info.json")
+    crispressoSea_info_file = os.path.join(output_folder, "CRISPResso2Sea_info.json")
 
     crispresso2_info = {
         "running_info": {
             "version": __version__,
             "log_filename": os.path.basename(log_filename),
-            "args": None,
+            "args": deepcopy(args),
         },
         "results": {
             "summary_stats": {},
@@ -119,14 +135,43 @@ def process_pools(
         except Exception as e:
             raise Exception(f"Could not read sample file {sample_file}: {e}")
 
-    # Try to get groups; if no group column, proceed without groups
-    try:
-        groups = list(sample_df["group"].unique())
-    except KeyError:
-        groups = []
-        logger.debug(
-            'No "group" column found in sample file. Proceeding without grouping.'
+    #check for unique 'Name' column
+    if "Name" not in sample_df.columns:
+        raise Exception(
+            'Sample file must have column "Name".\n'
+            + "Found columns: "
+            + str(list(sample_df.columns))
         )
+    if sample_df["Name"].duplicated().any():
+        raise Exception(
+            'In sample file "' + sample_file + '" each sample must have a unique value for "Name".\n'
+            + 'Duplicated "Name" values: '
+            + str('"' + '", "'.join(sample_df[sample_df["Name"].duplicated()]["Name"].unique()) + '"')
+        )
+    print('got here 151')
+
+    # add gorup column if not present
+    if 'group' not in sample_df.columns:
+        sample_df['group'] = ''
+
+    renamed_columns = []
+    for col in sample_df.columns:
+        if col.lower() == 'fastq_r1':
+            renamed_columns.append("fastq_r1")
+        elif col.lower() == 'r1':
+            renamed_columns.append("fastq_r1")
+        elif col.lower() == 'fastq_r2':
+            renamed_columns.append("fastq_r2")
+        elif col.lower() == 'r2':
+            renamed_columns.append("fastq_r2")
+        elif col.lower() == 'name':
+            renamed_columns.append("Name")
+        elif col.lower() == 'group':
+            renamed_columns.append("group")
+        else:
+            renamed_columns.append(col)
+        
+    sample_df.columns = renamed_columns
 
     required_columns = ["Name", "fastq_r1"]
     for col in required_columns:
@@ -178,25 +223,31 @@ def process_pools(
 
     # Define variables referenced later but not defined previously
     completed_samples = []
-    # TODO: Keep track of failed samples
     failed_samples = {}
     display_names = {}
 
-    merged_regions, merged_regions_infos = run_initial_demux(
+    merged_region_info_file = run_initial_demux(
         first_sample_name,
         first_sample_r1,
         first_sample_r2,
         genome_file,
         output_folder=crispresso_output_folder,
         n_processors=n_processors,
+        crispresso_quantification_window_center=crispresso_quantification_window_center,
+        crispresso_quantification_window_size=crispresso_quantification_window_size,
+        crispresso_base_editor_output=crispresso_base_editor_output,
+        crispresso_default_min_aln_score=crispresso_default_min_aln_score,
+        crispresso_plot_window_size=crispresso_plot_window_size,
         allow_unplaced_chrs=allow_unplaced_chrs,
+        top_percent_cutoff=top_percent_cutoff,
+        min_amplicon_len=min_amplicon_len,
+        fail_on_pooled_fail=fail_on_pooled_fail,
     )
+
     crispresso_region_file, guide_df, region_df = make_guide_region_assignments(
-        merged_regions,
-        merged_regions_infos,
+        merged_region_info_file,
         guide_file,
         output_folder,
-        genome_file,
         sort_based_on_mismatch,
         allow_guide_match_to_other_region_loc=allow_guide_match_to_other_region_loc,
     )
@@ -223,6 +274,12 @@ def process_pools(
             crispresso_region_file,
             crispresso_output_folder,
             n_processors=n_processors,
+            crispresso_quantification_window_center=crispresso_quantification_window_center,
+            crispresso_quantification_window_size=crispresso_quantification_window_size,
+            crispresso_base_editor_output=crispresso_base_editor_output,
+            crispresso_default_min_aln_score=crispresso_default_min_aln_score,
+            crispresso_plot_window_size=crispresso_plot_window_size,
+            fail_on_pooled_fail=fail_on_pooled_fail,
         )
         sample_df.loc[sample_idx, "CRISPRessoPooled_output_folder"] = this_pooled_run
         if this_pooled_run is not None:
@@ -264,33 +321,38 @@ def process_pools(
 
     if plot_only_complete_guides:
         aggregated_stats_good = aggregated_stats.dropna()
+        info(
+            "Plotting for "
+            + str(len(aggregated_stats_good))
+            + "/"
+            + str(len(aggregated_stats))
+            + " guides after removing guides missing data in any samples"
+        )
     else:
         aggregated_stats_good = aggregated_stats
+        info(
+            "Plotting for "
+            + str(len(aggregated_stats_good))
+            + " guides"
+        )
+
     guide_plot_df = create_guide_df_for_plotting(aggregated_stats_good)
     guide_plot_df.index = (
-        aggregated_stats_good["guide_chr"]
+        aggregated_stats_good["guide_chr"] #these columns aren't in guide_plots_df ...
         + ":"
         + aggregated_stats_good["guide_pos"].astype(str)
         + " "
         + aggregated_stats_good["guide_name"]
     )
 
-    info(
-        "Plotting for "
-        + str(len(aggregated_stats_good))
-        + "/"
-        + str(len(aggregated_stats))
-        + " guides after removing guides missing data in any samples"
-    )
 
     crispresso2_info = create_plots(
-        aggregated_stats_good,
-        sample_df,
-        guide_plot_df,
-        groups,
-        output_folder,
-        None,
-        crispresso2_info,
+        data_df=aggregated_stats_good,
+        sample_df=sample_df,
+        guide_plot_df=guide_plot_df,
+        output_folder=output_folder,
+        file_prefix=None,
+        crispresso2_info=crispresso2_info,
     )
     # Update crispresso2_info fields that depend on sample_df
     crispresso2_info["results"]["samples"] = [
@@ -304,17 +366,16 @@ def process_pools(
     crispresso2_info["results"]["sea_input_names"] = {
         sample_name: sample_name for sample_name in sample_df["Name"]
     }
-    if groups:
-        crispresso2_info["results"]["sea_input_groups"] = {
-            sample_name: sample_df.loc[
-                sample_df["Name"] == sample_name, "group"
-            ].values[0]
-            for sample_name in sample_df["Name"]
-        }
-    else:
-        crispresso2_info["results"]["sea_input_groups"] = {}
 
-    _root = None
+
+    crispresso2_info["results"]["sea_input_groups"] = {}
+    for idx, row in sample_df.iterrows():
+        sample_name = row["Name"]
+        group = row.get("group", "")
+        if group != '':
+            crispresso2_info["results"]["sea_input_groups"][sample_name] = group
+
+    _root = os.path.abspath(os.path.dirname(__file__))
     crispressoSea_report_file = os.path.join(
         output_folder, "output_crispresso_sea.html"
     )
@@ -331,7 +392,7 @@ def get_jinja_loader(root, logger):
     """
     undefined_logger = make_logging_undefined(logger=logger)
     return Environment(
-        loader=FileSystemLoader(os.path.realpath("templates")),
+        loader=FileSystemLoader(os.path.join(root,'templates')),
         undefined=undefined_logger,
     )
 
@@ -391,16 +452,10 @@ def make_multi_report(
     j2_env = get_jinja_loader(_root, logger)
 
     j2_env.filters["dirname"] = dirname
-    if crispresso_tool == "batch":
-        template = "batchReport.html"
-    elif crispresso_tool == "pooled":
-        template = "pooledReport.html"
-    elif crispresso_tool == "wgs":
-        template = "wgsReport.html"
-    elif crispresso_tool == "sea":
+    if crispresso_tool == "sea":
         template = "seaReport.html"
     else:
-        template = "multiReport.html"
+        raise Exception('Cannot create report for tool "' + crispresso_tool + '"')
 
     crispresso_data_path = os.path.relpath(
         crispresso_folder,
@@ -442,6 +497,7 @@ def make_multi_report(
             "datas": [],
             "htmls": [],
         }
+
     for html in sub_html_files:
         sub_html_files[html] = crispresso_data_path + sub_html_files[html]
     with open(crispresso_multi_report_file, "w", encoding="utf-8") as outfile:
@@ -519,9 +575,9 @@ def make_sea_report_from_folder(
     crispressoSea_report_file, crispresso2_info, sea_folder, _root, logger
 ):
     """
-    Makes a report for a CRIPSRessoBatch run
+    Makes a report for a CRIPSRessoSea run
     """
-    batch_names = crispresso2_info["results"]["completed_sea_arr"]
+    sea_names = crispresso2_info["results"]["completed_sea_arr"]
     failed_runs = crispresso2_info["results"]["failed_sea_arr"]
     failed_runs_desc = crispresso2_info["results"]["failed_sea_arr_desc"]
     display_names = crispresso2_info["results"]["sea_input_names"]
@@ -574,7 +630,7 @@ def make_sea_report_from_folder(
     summary_plot_titles["samples"] = "samples"
     summary_plot_labels["samples"] = {}
     summary_plot_datas["samples"] = {"names": {}, "groups": {}}
-    for sample in batch_names:
+    for sample in sea_names:
         summary_plot_datas["samples"]["names"][sample] = display_names[sample]
         if groups:
             summary_plot_datas["samples"]["groups"][sample] = groups[sample]
@@ -590,7 +646,7 @@ def make_sea_report_from_folder(
 
     sub_html_files = {}
     run_names = []
-    for name in batch_names:
+    for name in sea_names:
         display_name = display_names[name]
         sub_folder = os.path.join("CRISPResso_output", "CRISPRessoPooled_on_" + name)
         crispresso_folder = os.path.join(sea_folder, sub_folder)
@@ -601,7 +657,7 @@ def make_sea_report_from_folder(
         )
         if "running_info" not in run_data:
             raise Exception(
-                f"CRISPResso run {sub_folder} has no report. Cannot add to batch report."
+                f"CRISPResso run {sub_folder} has no report. Cannot add to Sea report."
             )
 
         this_sub_html_file = sub_folder + ".html"
@@ -617,10 +673,9 @@ def make_sea_report_from_folder(
         run_names.append(display_name)
 
     output_title = "CRISPResso Sea Output"
-    if (
-        crispresso2_info["running_info"]["args"]
-        and crispresso2_info["running_info"]["args"].name != ""
-    ):
+    if ((crispresso2_info["running_info"]["args"]) and
+            ('name' in crispresso2_info["running_info"]["args"]) and
+            (crispresso2_info["running_info"]["args"].name != "")):
         output_title += f"<br/>{crispresso2_info['running_info']['args'].name}"
 
     make_multi_report(
@@ -673,6 +728,7 @@ def merge_locations(
     crispresso_pooled_genome_folder,
     genome_file,
     allow_unplaced_chrs=False,
+    top_percent_cutoff = 0.2,
     min_amplicon_len=50,
     debug=False,
 ):
@@ -683,14 +739,21 @@ def merge_locations(
     - crispresso_pooled_genome_folder: the folder containing the CRISPRessoPooled output
     - genome_file: path to the genome file
     - allow_unplaced_chrs: whether to allow regions on unplaced chromosomes (chrUn, random, etc). If true, these regions will be included.
-    - min_amplicon_len: the minimum length of an amplicon to consider
-    - debug: whether to print debug information
+    - top_percent_cutoff: the top percent of aligned regions (by region read depth) to consider in finding non-overlapping regions. This is a float between 0 and 1. For example, if set to 0.2, the top 20% of regions (by read depth) will be considered.
+    - min_amplicon_len: the minimum length of an amplicon to consider in finding non-overlapping regions. Amplicons shorter than this will be ignored.
 
     returns:
-    - list of merged regions
-    - dictionary of merged regions -> region info (e.g. chr, start, end, read count)
+    - good_region_file: file containing df of merged regions with columns for: chr, start, end, read_count and seq)
 
     """
+    # if output is already completed, just read that in and return it
+    good_region_file = os.path.join(crispresso_pooled_genome_folder, "good_nonoverlapping_regions.txt")
+    if os.path.isfile(good_region_file):
+        info('Using regions from ' + good_region_file, {'percent_complete': 20})
+        return good_region_file
+    logger.debug("Couldn't find completed regions file at " + good_region_file + ". Generating now.", {'percent_complete': 10})
+
+    #otherwise process the read counts for each region
     genome_read_counts_file = os.path.join(
         crispresso_pooled_genome_folder, "REPORT_READS_ALIGNED_TO_GENOME_ALL_DEPTHS.txt"
     )
@@ -699,25 +762,18 @@ def merge_locations(
             "Genome read counts file not found at " + genome_read_counts_file
         )
 
+    logger.debug('Reading regions from ' + genome_read_counts_file)
+
     region_info = {}
     good_nonoverlapping_regions = []
     region_df = pd.read_csv(genome_read_counts_file, sep="\t")
     region_df_sub = region_df.sort_values(by="number of reads", ascending=False)
-    top_percent_cutoff = 0.2
+
     top_percent_count = int(len(region_df_sub) * top_percent_cutoff)
     region_df_sub = region_df_sub.head(top_percent_count)
-    print(
-        "Considering top "
-        + str(top_percent_cutoff * 100)
-        + "% of regions (N="
-        + str(top_percent_count)
-        + "/"
-        + str(region_df.shape[0])
-        + ") with at least "
-        + str(region_df_sub["number of reads"].min())
-        + " reads (mean reads is "
-        + str(region_df_sub["number of reads"].mean())
-        + ")"
+    info(
+        "Considering top " + str(top_percent_cutoff * 100) + "% of regions (N=" + str(top_percent_count) + "/" + str(region_df.shape[0]) + ") with at least " 
+        + str(region_df_sub["number of reads"].min()) + " reads (mean reads is " + str(region_df_sub["number of reads"].mean()) + ")"
     )
 
     seen_region_seqs = {}
@@ -795,16 +851,32 @@ def merge_locations(
 
     total_region_count = region_df.shape[0]
     kept_region_count = len(good_nonoverlapping_regions)
-    info("Kept " + str(kept_region_count) + "/" + str(total_region_count) + " regions")
+    info("Kept " + str(kept_region_count) + "/" + str(total_region_count) + " regions", {'percent_complete': 20})
     if debug:
         for region in good_nonoverlapping_regions:
-            print(region)
-    good_nonoverlapping_region_infos = {}
+            logger.debug(region)
+    good_nonoverlapping_region_rows = []
     for region in good_nonoverlapping_regions:
         this_region_info = region_info[region]
-        good_nonoverlapping_region_infos[region] = this_region_info
-    return good_nonoverlapping_regions, good_nonoverlapping_region_infos
+        good_nonoverlapping_region_rows.append(
+            [
+                this_region_info["chr"],
+                this_region_info["start"],
+                this_region_info["end"],
+                this_region_info["region_count"],
+                this_region_info["seq"],
+            ]
+        )
 
+    good_nonoverlapping_region_df = pd.DataFrame(
+        good_nonoverlapping_region_rows,
+        columns=["chr", "start", "end", "read_count", "seq"],
+    )
+
+    info('Wrote good regions to ' + good_region_file, {'percent_complete': 20})
+    good_nonoverlapping_region_df.to_csv(good_region_file, sep="\t", index=False)
+
+    return good_region_file
 
 def run_initial_demux(
     experiment_name,
@@ -813,8 +885,16 @@ def run_initial_demux(
     genome_file,
     output_folder="",
     n_processors=8,
+    crispresso_quantification_window_center=-3,
+    crispresso_quantification_window_size=1,
+    crispresso_base_editor_output=False,
+    crispresso_default_min_aln_score=20,
+    crispresso_plot_window_size=20,
     allow_unplaced_chrs=False,
+    top_percent_cutoff=0.2,
+    min_amplicon_len=50,
     suppress_output=True,
+    fail_on_pooled_fail=False,
 ):
     """
     Run CRISPResso on input reads to determine which regions are frequently aligned to
@@ -826,12 +906,21 @@ def run_initial_demux(
     - genome_file: path to the genome file
     - output_folder: path to the output folder where results should be written
     - n_processors: number of processors to use
+    - crispresso_quantification_window_center: the window to use for CRISPResso2 quantification. This will be used for CRISPResso2 subruns and corresponds to the parameter --quantification_window_center. If None, the default value of -3 will be used.
+    - crispresso_quantification_window_size: the window size to use for CRISPResso2 quantification. This will be used for CRISPResso2 subruns and corresponds to the parameter --quantification_window_size. If None, the default value of 1 will be used.
+    - crispresso_base_editor_output: whether to output base editor plots. If True, base editor plots will be output. If False, base editor plots will not be output.
+    - crispresso_default_min_aln_score: the minimum alignment score to use for CRISPResso2. This will be used for CRISPResso2 subruns and corresponds to the parameter --default_min_aln_score. If None, the default value of 20 will be used.
+    - crispresso_plot_window_size: the window size to use for CRISPResso2 plots. This will be used for CRISPResso2 subruns and corresponds to the parameter --plot_window_size. If None, the default value of 20 will be used.
     - allow_unplaced_chrs: whether to allow regions on bad chromosomes (chrUn, random, etc). If true, these regions will be included.
+    - top_percent_cutoff: the top percent of aligned regions (by region read depth) to consider in finding non-overlapping regions. This is a float between 0 and 1. For example, if set to 0.2, the top 20% of regions (by read depth) will be considered.
+    - min_amplicon_len: the minimum length of an amplicon to consider in finding non-overlapping regions. Amplicons shorter than this will be ignored.
+    - fail_on_pooled_fail: if true, fail if any pooled CRISPResso run fails. Otherwise, continue even if sub-CRISPResso commands fail.
 
     returns:
-    - list of merged regions
-    - dictionary of merged regions -> region info (e.g. chr, start, end, read count)
+    - merged_regions_file: file with df of merged regions with columns for: chr, start, end, read_count and seq)
     """
+
+    info ("Running initial demultiplexing to find amplicon locations", {'percent_complete': 5})
 
     r2_string = ""
     if fastq_r2 is not None:
@@ -841,24 +930,29 @@ def run_initial_demux(
         output_string = " -o " + output_folder
     suppress_output_string = ""
     if suppress_output:
-        suppress_output_string = " --verbosity 0"
+        suppress_output_string = " --verbosity 1 "
+
+    stop_on_fail_string = " --skip_failed "
+    if not fail_on_pooled_fail:
+        stop_on_fail_string = ""
 
     CRISPResso_output_folder = (
         output_folder + "CRISPRessoPooled_on_" + experiment_name + "_demux"
     )
+
     command = (
-        "CRISPRessoPooled -x "
-        + genome_file
-        + " -r1 "
-        + fastq_r1
+        "CRISPRessoPooled -x " + genome_file
+        + " -r1 " + fastq_r1
         + r2_string
         + output_string
-        + " -n "
-        + experiment_name
-        + "_demux -p "
-        + str(n_processors)
+        + " --quantification_window_center " + str(crispresso_quantification_window_center) 
+        + " --quantification_window_size " + str(crispresso_quantification_window_size)
+        + " --default_min_aln_score " + str(crispresso_default_min_aln_score)
+        + " -n " + experiment_name + "_demux -p " + str(n_processors)
         + " --no_rerun --keep_intermediate --suppress_plots"
+        + " --plot_window_size " + str(crispresso_plot_window_size)
         + suppress_output_string
+        + stop_on_fail_string
     )
 
     crispresso_run_is_complete = False
@@ -883,22 +977,21 @@ def run_initial_demux(
         info("Running command " + str(command))
         subprocess.run(command, shell=True, check=True)
 
-    merged_regions, merged_regions_infos = merge_locations(
-        CRISPResso_output_folder, genome_file, allow_unplaced_chrs=allow_unplaced_chrs
+    merged_regions_file = merge_locations(
+        CRISPResso_output_folder, genome_file, allow_unplaced_chrs=allow_unplaced_chrs, top_percent_cutoff=top_percent_cutoff, min_amplicon_len=min_amplicon_len, debug=False
     )
 
-    return merged_regions, merged_regions_infos
+    return merged_regions_file
 
 
 def parse_guide_info(guide_file, sort_based_on_mismatch=False):
     """
     Parse a guide file in tab-separated or xls format. Required columns are:
-    Name: the name of the on-target guide
-    Sequence: the sequence of the target site (either on-target or off-target)
-    PAM: the PAM at the target site
-    Score: the score of the off-target
-    #MM: the number of mismatches between the on- and off-target. If this is 0 or NA, this guide is considered the on-target
-    Locus: the locus of the target site in the genome, in the format chr:+pos for positive strand or chr:-pos for negative strand
+        Name: the name of the on-target guide
+        Sequence: the sequence of the target site (either on-target or off-target)
+        PAM: the PAM at the target site
+        #MM: the number of mismatches between the on- and off-target. If this is 0 or NA, this guide is considered the on-target
+        Locus: the locus of the target site in the genome, in the format chr:pos or chr:+pos for positive strand or chr:-pos for negative strand
 
     Optional column:
     anno: an annotation name for the guide
@@ -922,12 +1015,7 @@ def parse_guide_info(guide_file, sort_based_on_mismatch=False):
         guide_pam: the guide pam sequence
         ontarget_name: the name of the on-target guide
         ontarget_sequence: the sequence of the on-target guide
-
-    - a dictionary of guide_id -> guide_name
-
     """
-    guide_name_lookup = {}
-
     if not os.path.exists(guide_file):
         raise Exception("Guide file not found at " + guide_file)
 
@@ -936,7 +1024,7 @@ def parse_guide_info(guide_file, sort_based_on_mismatch=False):
     else:
         guide_df = pd.read_csv(guide_file, sep="\t")
 
-    required_columns = ["Name", "Sequence", "PAM", "Score", "#MM", "Gene", "Locus"]
+    required_columns = ["Name", "Sequence", "PAM", "#MM", "Locus"]
 
     for col in required_columns:
         if col not in guide_df.columns:
@@ -967,7 +1055,7 @@ def parse_guide_info(guide_file, sort_based_on_mismatch=False):
                 + row["Name"]
                 + " has "
                 + str(row["#MM"])
-                + " mismatches"
+                + " mismatches (expecting 0 mismatches for on-target)"
             )
 
     ontarget_seqs = {}
@@ -994,15 +1082,17 @@ def parse_guide_info(guide_file, sort_based_on_mismatch=False):
                 + str(list(ontarget_seqs.keys()))
             )
         if str(row["#MM"]) == "0":
-            this_guide_id = this_ontarget_name + "_ON"
+            this_guide_id = f'{idx}_{this_ontarget_name}_ON'
         else:
-            this_guide_id = this_ontarget_name + "_OB" + str(int(row["#MM"]))
+            this_guide_id = f'{idx}_{this_ontarget_name}_OB{str(int(row["#MM"]))}'
 
         guide_df.loc[idx, "guide_id"] = str(idx) + " " + this_guide_id
 
         this_guide_name = this_guide_id
         if "anno" in row and row["anno"] is not None and str(row["anno"]) != "nan":
             this_guide_name = row["anno"]
+        if "Anno" in row and row["Anno"] is not None and str(row["Anno"]) != "nan":
+            this_guide_name = row["Anno"]
         guide_df.loc[idx, "guide_name"] = this_guide_name
 
         if this_ontarget_name not in ontarget_seqs:
@@ -1018,7 +1108,10 @@ def parse_guide_info(guide_file, sort_based_on_mismatch=False):
 
         this_chr_loc_els = row["Locus"].split(":")
         this_chr = this_chr_loc_els[0]
-        this_pos = int(this_chr_loc_els[1][1:])
+        if '+' in this_chr_loc_els[1] or '-' in this_chr_loc_els[1]:
+            this_pos = int(this_chr_loc_els[1][1:])
+        else:
+            this_pos = int(this_chr_loc_els[1])
         guide_df.loc[idx, "guide_chr"] = this_chr
         guide_df.loc[idx, "guide_pos"] = this_pos
         guide_df.loc[idx, "guide_seq_no_gaps_with_pam"] = (
@@ -1026,10 +1119,7 @@ def parse_guide_info(guide_file, sort_based_on_mismatch=False):
         )
         guide_df.loc[idx, "guide_seq_no_gaps"] = row["Sequence"].replace("-", "")
 
-        guide_name_lookup[this_guide_id] = this_guide_name
-
-    return (
-        guide_df[
+    return guide_df[
             [
                 "guide_id",
                 "guide_name",
@@ -1043,17 +1133,13 @@ def parse_guide_info(guide_file, sort_based_on_mismatch=False):
                 "ontarget_name",
                 "ontarget_sequence",
             ]
-        ],
-        guide_name_lookup,
-    )
+        ]
 
 
 def make_guide_region_assignments(
-    merged_regions,
-    merged_regions_infos,
+    merged_region_info_file,
     guide_file,
     output_folder,
-    genome_file,
     sort_based_on_mismatch=False,
     allow_guide_match_to_other_region_loc=False,
 ):
@@ -1061,11 +1147,9 @@ def make_guide_region_assignments(
     Assign guides to regions based on their sequences and positions
 
     params:
-    - merged_regions: list of merged regions
-    - merged_regions_infos: dictionary of merged regions -> region info (e.g. chr, start, end, read count)
+    - merged_region_info_df: dataframe of merged regions with columns for: chr, start, end, read_count and seq
     - guide_file: path to the user-provided guide file
     - output_folder: path to the output file root
-    - genome_file: path to the genome file to look up region seqeunces
     - sort_based_on_mismatch: if true, guides are sorted based on mismatch count. If false, guides are presented in the order they are in the file
     - allow_guide_match_to_other_region_loc: if true, guides can be matched to regions based on sequence even if they are not in the same position. If false, guides can only match to regions containing that guide's chr:loc
 
@@ -1075,13 +1159,9 @@ def make_guide_region_assignments(
     - region_df: the region dataframe
     """
     # we parse the guide_df here because we'll add more columns to it
-    guide_df, guide_name_lookup = parse_guide_info(guide_file, sort_based_on_mismatch)
-
-    for region in merged_regions:
-        region_chr = merged_regions_infos[region]["chr"]
-        region_start = merged_regions_infos[region]["start"]
-        region_end = merged_regions_infos[region]["end"]
-        region_seq = merged_regions_infos[region]["seq"]
+    guide_df = parse_guide_info(guide_file, sort_based_on_mismatch)
+    merged_region_df = pd.read_csv(merged_region_info_file, sep="\t")
+    merged_region_df.index = merged_region_df["chr"].astype(str) + "_" + merged_region_df["start"].astype(str) + "_" + merged_region_df["end"].astype(str)
 
     # first, for each guide, match its sequence to genomic region(s)
     # the matching will be performed so that each guide is assigned to
@@ -1108,12 +1188,12 @@ def make_guide_region_assignments(
 
         this_guide_seq_matches = []
         this_guide_region_matches = []
-        for region in merged_regions:
-            region_info = merged_regions_infos[region]
-            region_chr = region_info["chr"]
-            region_start = region_info["start"]
-            region_end = region_info["end"]
-            region_seq = region_info["seq"]
+        for region_idx, region_row in merged_region_df.iterrows():
+            region_name = region_row.name
+            region_chr = region_row["chr"]
+            region_start = region_row["start"]
+            region_end = region_row["end"]
+            region_seq = region_row["seq"]
 
             # first, check if the region contains the guide sequence
             is_seq_match = False
@@ -1128,7 +1208,7 @@ def make_guide_region_assignments(
                 is_seq_match = False
 
             if is_seq_match:
-                this_guide_seq_matches.append(region)
+                this_guide_seq_matches.append(region_name)
 
             # next, check if the guide position is within the region
             is_pos_match = False
@@ -1137,19 +1217,19 @@ def make_guide_region_assignments(
                 and guide_pos >= region_start
                 and guide_pos <= region_end
             ):
-                this_guide_region_matches.append(region)
+                this_guide_region_matches.append(region_name)
                 is_pos_match = True
             elif (
                 guide_chr.replace("chr", "") == region_chr.replace("chr", "")
                 and guide_pos >= region_start
                 and guide_pos <= region_end
             ):
-                this_guide_region_matches.append(region)
+                this_guide_region_matches.append(region_name)
                 is_pos_match = True
 
             if is_seq_match or is_pos_match:
-                all_guide_matches[guide_id].append(region)
-                all_region_matches[region].append(guide_id)
+                all_guide_matches[guide_id].append(region_name)
+                all_region_matches[region_name].append(guide_id)
 
         # make the final assignment for this guide
         if len(this_guide_region_matches) == 1:  # if there is one region match, take it
@@ -1158,15 +1238,15 @@ def make_guide_region_assignments(
         elif (
             len(this_guide_region_matches) > 1
         ):  # if there are multiple region matches, take the one with highest number of reads
-            best_region = None
+            best_region_name = None
             best_region_count = 0
-            for region in this_guide_region_matches:
-                region_count = merged_regions_infos[region]["region_count"]
+            for region_name in this_guide_region_matches:
+                region_count = merged_region_df.loc[region_name, "region_count"]
                 if region_count > best_region_count:
-                    best_region = region
+                    best_region_name = region_name
                     best_region_count = region_count
-            guide_matches[guide_id] = best_region
-            region_matches[best_region].append(guide_id)
+            guide_matches[guide_id] = best_region_name
+            region_matches[best_region_name].append(guide_id)
         elif (
             len(this_guide_seq_matches) == 1
         ):  # if there is one sequence match, take it
@@ -1175,21 +1255,21 @@ def make_guide_region_assignments(
         elif (
             len(this_guide_seq_matches) > 1
         ):  # if there are multiple sequence matches, take the one with highest number of reads without a guide match
-            best_region = this_guide_seq_matches[0]
+            best_region_name = this_guide_seq_matches[0]
             best_region_count = 0
-            for region in this_guide_seq_matches:
-                region_count = merged_regions_infos[region]["region_count"]
+            for region_name in this_guide_seq_matches:
+                region_count = merged_region_df.loc[region_name, "region_count"]
                 if (
                     region_count > best_region_count
-                    and len(region_matches[region]) == 0
+                    and len(region_matches[region_name]) == 0
                 ):
-                    best_region = region
+                    best_region = region_name
                     best_region_count = region_count
-            guide_matches[guide_id] = best_region
-            region_matches[best_region].append(guide_id)
+            guide_matches[guide_id] = best_region_name
+            region_matches[best_region_name].append(guide_id)
 
     # next, finalize matches and write them to file
-    out_file = output_folder + "guide_matches.txt"
+    out_file = output_folder + "guide_region_matches.txt"
     guide_match_count = 0  # how many guides had a region match
     guide_nomatch_count = 0  # how many guides did not have a region match
 
@@ -1213,11 +1293,11 @@ def make_guide_region_assignments(
                 matched_region_count = len(all_guide_matches[guide_seq_id])
                 matched_regions = ", ".join(all_guide_matches[guide_seq_id])
                 region_name = guide_matches[guide_seq_id]
-                region_info = merged_regions_infos[region_name]
-                region_chr = region_info["chr"]
-                region_start = region_info["start"]
-                region_end = region_info["end"]
-                region_seq = region_info["seq"]
+                region_chr = merged_region_df.loc[region_name, "chr"]
+                region_start = merged_region_df.loc[region_name, "start"]
+                region_end = merged_region_df.loc[region_name, "end"]
+                region_count = merged_region_df.loc[region_name, "read_count"]
+                region_seq = merged_region_df.loc[region_name, "seq"]
                 fout.write(
                     "\t".join(
                         [
@@ -1236,7 +1316,7 @@ def make_guide_region_assignments(
                                 region_chr,
                                 region_start,
                                 region_end,
-                                region_info["region_count"],
+                                region_count,
                                 region_seq,
                             ]
                         ]
@@ -1309,7 +1389,8 @@ def make_guide_region_assignments(
         + "/"
         + str(len(guide_df))
         + " guides to regions from read alignments. Wrote matches to "
-        + out_file
+        + out_file,
+        {'percent_complete': 25}
     )
 
     # next write information about all regions plus the file for crispresso input
@@ -1324,43 +1405,32 @@ def make_guide_region_assignments(
         rout.write(
             "region_id\tchr\tstart\tend\tread_count\tseq\tguide_match_count\tguide_matches\tguide_id\tguide_name\tguide_seq\tguide_chr\tguide_pos\n"
         )
-        for region in merged_regions:
-            region_info = merged_regions_infos[region]
-            region_chr = region_info["chr"]
-            region_start = region_info["start"]
-            region_end = region_info["end"]
-            region_seq = region_info["seq"]
-            region_name = "_".join([region_chr, str(region_start), str(region_end)])
+        for region_idx, region_row in merged_region_df.iterrows():
+            region_chr = region_row["chr"]
+            region_start = region_row["start"]
+            region_end = region_row["end"]
+            region_seq = region_row["seq"]
+            region_count = region_row["read_count"]
+            region_name = region_row.name
+
             guide_id = "NA"
             guide_name = "NA"
             guide_seq = "NA"
             guide_chr = "NA"
             guide_pos = "NA"
-            this_guide_match_count = len(all_region_matches[region])
+            this_guide_match_count = len(all_region_matches[region_name])
             if this_guide_match_count > 0:
-                this_guide_matches = ", ".join(all_region_matches[region])
+                this_guide_matches = ", ".join(all_region_matches[region_name])
             else:
                 this_guide_matches = "NA"
-            if region in all_region_matches:
-                if region in region_matches:
+            if region_name in all_region_matches:
+                if region_name in region_matches:
                     region_match_count += 1
-                    guide_id = region_matches[region][
-                        0
-                    ]  # the assigned guides that matched to this region
-                    guide_seq = guide_df.loc[
-                        guide_df["guide_id"] == guide_id, "guide_seq_no_gaps"
-                    ].values[
-                        0
-                    ]  # no pam (for CRISPResso)
-                    guide_name = guide_df.loc[
-                        guide_df["guide_id"] == guide_id, "guide_name"
-                    ].values[0]
-                    guide_chr = guide_df.loc[
-                        guide_df["guide_id"] == guide_id, "guide_chr"
-                    ].values[0]
-                    guide_pos = guide_df.loc[
-                        guide_df["guide_id"] == guide_id, "guide_pos"
-                    ].values[0]
+                    guide_id = region_matches[region_name][0]  # the assigned guides that matched to this region
+                    guide_seq = guide_df.loc[guide_df["guide_id"] == guide_id, "guide_seq_no_gaps"].values[0]  # no pam (for CRISPResso)
+                    guide_name = guide_df.loc[guide_df["guide_id"] == guide_id, "guide_name"].values[0]
+                    guide_chr = guide_df.loc[guide_df["guide_id"] == guide_id, "guide_chr"].values[0]
+                    guide_pos = guide_df.loc[guide_df["guide_id"] == guide_id, "guide_pos"].values[0]
                     region_name = region_name + "_" + guide_name
                     cout.write("\t".join([region_name, region_seq, guide_seq]) + "\n")
                     printed_crispresso_count += 1
@@ -1371,21 +1441,9 @@ def make_guide_region_assignments(
             rout.write(
                 "\t".join(
                     str(x)
-                    for x in [
-                        region_name,
-                        region_chr,
-                        region_start,
-                        region_end,
-                        region_info["region_count"],
-                        region_seq,
-                        this_guide_match_count,
-                        this_guide_matches,
-                        guide_id,
-                        guide_name,
-                        guide_seq,
-                        guide_chr,
-                        guide_pos,
-                    ]
+                    for x in [ region_name, region_chr, region_start, region_end, region_count, region_seq, 
+                              this_guide_match_count, this_guide_matches, guide_id, guide_name, 
+                              guide_seq, guide_chr, guide_pos, ]
                 )
                 + "\n"
             )
@@ -1396,16 +1454,17 @@ def make_guide_region_assignments(
         + "/"
         + str(region_match_count + region_nomatch_count)
         + " frequently-aligned locations to guides. Wrote region info to "
-        + all_region_output_file
+        + all_region_output_file,
+        {'percent_complete': 30}
     )
 
     if printed_crispresso_count == 0:
         raise Exception(
-            "No regions matched to guides. Check the guide file and the regions file for consistency"
+            "No regions matched to guides. Check the guide file and the regions file for consistency.\n" + \
+            "\tGuide file: " + guide_file + "\n\tRegions file: " + merged_region_info_file
         )
     region_df = pd.read_csv(all_region_output_file, sep="\t")
     return crispresso_output_file, guide_df, region_df
-
 
 def run_crispresso_with_assigned_regions(
     experiment_name,
@@ -1415,8 +1474,13 @@ def run_crispresso_with_assigned_regions(
     crispresso_region_file,
     output_folder,
     n_processors=8,
-    suppress_output=True,
-    skip_failed_subruns=True,
+    crispresso_quantification_window_center=-3,
+    crispresso_quantification_window_size=1,
+    crispresso_base_editor_output=False,
+    crispresso_default_min_aln_score=60,
+    crispresso_plot_window_size=20,
+    suppress_commandline_output=True,
+    fail_on_pooled_fail=False,
 ):
     """
     Run CRISPResso on a specific sample with the assigned regions
@@ -1428,8 +1492,13 @@ def run_crispresso_with_assigned_regions(
     - genome_file: path to the genome file
     - crispresso_region_file: path to the file with region assignments
     - n_processors: number of processors to use
-    - suppress_output: whether to suppress output from CRISPRessoPooled
-    - skip_failed_subruns: whether to skip failed CRISPRessoPooled subruns. If true, CRISPRessoPooled will complete even if individual subruns fail (e.g. due to too few aligned reads).
+    - crispresso_quantification_window_center: the center of the quantification window
+    - crispresso_quantification_window_size: the size of the quantification window
+    - crispresso_base_editor_output: whether to output base editor results
+    - crispresso_default_min_aln_score: the minimum alignment score for CRISPResso
+    - crispresso_plot_window_size: the size of the plot window
+    - suppress_commandline_output: whether to suppress commandline output from CRISPRessoPooled
+    - fail_on_pooled_fail: if true, fail if any pooled CRISPResso run fails. Otherwise, continue even if sub-CRISPResso commands fail.
 
     returns:
     - the output folder for this CRISPResso run
@@ -1443,34 +1512,37 @@ def run_crispresso_with_assigned_regions(
         output_string = " -o " + output_folder
 
     suppress_output_string = ""
-    if suppress_output:
-        suppress_output_string = " --verbosity 0"
+    if suppress_commandline_output:
+        suppress_output_string = " --verbosity 1"
 
-    skip_failed_string = ""
-    if skip_failed_subruns:
-        skip_failed_string = " --skip_failed"
+    stop_on_fail_string = ""
+    if not fail_on_pooled_fail:
+        stop_on_fail_string = " --skip_failed"
+
+    base_editor_string = ""
+    if crispresso_base_editor_output:
+        base_editor_string = " --base_editor_output "
 
     CRISPResso_output_folder = output_folder + "CRISPRessoPooled_on_" + experiment_name
 
     command = (
         "CRISPRessoPooled -f "
         + crispresso_region_file
-        + " -x "
-        + genome_file
-        + " -n "
-        + experiment_name
-        + " "
-        + " -r1 "
-        + fastq_r1
+        + " -x " + genome_file
+        + " -n " + experiment_name
+        + " -r1 " + fastq_r1
         + r2_string
         + output_string
-        + " --min_reads_to_use_region 1 --default_min_aln_score 20 "
-        + " --base_editor_output --quantification_window_center -10 --quantification_window_size 16"
-        + " -p "
-        + str(n_processors)
-        + " --no_rerun  --exclude_bp_from_left 0 --exclude_bp_from_right 0 --plot_window_size 10"
+        + " --min_reads_to_use_region 1 "
+        + base_editor_string 
+        + " --quantification_window_center " + str(crispresso_quantification_window_center) 
+        + " --quantification_window_size " + str(crispresso_quantification_window_size)
+        + " --default_min_aln_score " + str(crispresso_default_min_aln_score)
+        + " -p " + str(n_processors)
+        + " --no_rerun  --exclude_bp_from_left 0 --exclude_bp_from_right 0 "
+        + " --plot_window_size " + str(crispresso_plot_window_size)
         + suppress_output_string
-        + skip_failed_string
+        + stop_on_fail_string
     )
 
     crispresso_run_is_complete = False
@@ -1505,7 +1577,7 @@ def run_crispresso_with_assigned_regions(
 
 def analyze_run(output_name, crispresso_folder, guide_df, region_df):
     """
-    Analyzes a CRISPResso batch run to get the base editing and indel rates for each site
+    Analyzes a CRISPResso Pooled run to get the base editing and indel rates for each site
 
     params:
     - output_name: the name of the output file
@@ -1547,7 +1619,12 @@ def analyze_run(output_name, crispresso_folder, guide_df, region_df):
     pooled_info = CRISPRessoShared.load_crispresso_info(
         crispresso_info_file_path=crispresso_folder + "/CRISPResso2Pooled_info.json"
     )
-    pooled_results = pooled_info["results"]["good_region_folders"]
+    pooled_results = pooled_info["results"]["good_region_folders"] # dict of result_name to CRISPResso folder
+
+    if len(pooled_results) == 0:
+        raise Exception(
+            f"No results found in CRISPResso output folder {crispresso_folder}. Check the output folder for errors."
+        )
 
     output_dir = output_name + "_plots"
     os.makedirs(output_dir, exist_ok=True)
@@ -1833,18 +1910,27 @@ def create_guide_df_for_plotting(guide_df):
     aln_ontarget_seqs = []
     aln_offtarget_seqs = []
 
-    last_guide_name = None
+    last_guide_name = None # guide name - not the on/offtarget name
     last_guide_seq = None
     for idx, row in guide_df.iterrows():
-        if row["ontarget_name"] == last_guide_name:
+        if row["ontarget_name"] != last_guide_name: # this is the first time we see this guide sequence - plot the full sequence
+            last_guide_name = row["ontarget_name"]
+            last_guide_seq = row["guide_seq_no_gaps"] # may change this to row['ontarget_sequence'] if everything should be plotted with regard to the on-target sequence. As is, everything is plotted with regard to the vertically first time we see the guide sequence
+            this_seq = row["guide_seq_no_gaps"]
+            this_id = row["guide_id"]
+            names_for_plot.append(this_id)
+            seqs_for_plot.append((list(this_seq), row["guide_pam"]))
+            aln_ontarget_seqs.append(this_seq)
+            aln_offtarget_seqs.append(this_seq)
+        else: #otherwise, only plot only '.' or differences compared to the first time we see this guide sequence
             ref_incentive = np.zeros(len(last_guide_seq) + 1, dtype=int)
             off_target_aln, on_target_aln, aln_score = CRISPResso2Align.global_align(
-                row["guide_seq_no_gaps"],
-                last_guide_seq,
+                row["guide_seq_no_gaps"].upper(),
+                last_guide_seq.upper(),
                 matrix=aln_matrix,
                 gap_incentive=ref_incentive,
-                gap_open=-15,
-                gap_extend=-10,
+                gap_open=-20,
+                gap_extend=-20,
             )
 
             this_chars_for_plot = []
@@ -1910,16 +1996,6 @@ def create_guide_df_for_plotting(guide_df):
             aln_ontarget_seqs.append(on_target_aln)
             aln_offtarget_seqs.append(off_target_aln)
 
-        else:  # this is the on-target
-            last_guide_name = row["ontarget_name"]
-            last_guide_seq = row["ontarget_sequence"]
-            this_seq = row["guide_seq_no_gaps"]
-            this_id = row["guide_id"]
-            names_for_plot.append(this_id)
-            seqs_for_plot.append((list(this_seq), row["guide_pam"]))
-            aln_ontarget_seqs.append(this_seq)
-            aln_offtarget_seqs.append(this_seq)
-
     max_guide_len = 0
     max_pam_len = 0
     for guide_chars, pam_seq in seqs_for_plot:
@@ -1928,6 +2004,7 @@ def create_guide_df_for_plotting(guide_df):
         if len(pam_seq) > max_pam_len:
             max_pam_len = len(pam_seq)
 
+    # now, pad the alignments with spaces in case they are different lengths
     padded_seqs_for_plot = []
     for guide_chars, pam_seq in seqs_for_plot:
         padded_guide_chars = [" "] * (max_guide_len - len(guide_chars)) + guide_chars
@@ -1945,6 +2022,7 @@ def create_guide_df_for_plotting(guide_df):
         .tolist()
     )
     df_guides.index = guide_df["guide_id"]
+
     return df_guides
 
 
@@ -1952,7 +2030,6 @@ def create_plots(
     data_df,
     sample_df,
     guide_plot_df,
-    groups,
     output_folder,
     file_prefix="CRISPRessoSea",
     crispresso2_info=None,
@@ -1966,16 +2043,18 @@ def create_plots(
     heatmap_legend_fontsize=20,
     heatmap_legend_ncol=None,
 ):
-    """_summary_
+    """For each group, plot the highest_a_g_pct, highest_c_t_pct, highest_indel_pct, and tot_reads for each guide
 
     Args:
-        data_df (_type_): _description_
-        sample_df (_type_): _description_
-        guide_plot_df (_type_): _description_
-        groups (_type_): _description_
-        output_folder (_type_): _description_
-        file_prefix (str, optional): _description_. Defaults to "CRISPRessoSea".
-        crispresso2_info (_type_, optional): _description_. (Defaults to None)
+        data_df (pd.DataFrame): a dataframe with data for plotting
+            includes columns: guide_id, guide_seq_no_gaps_with_pam, guide_name, guide_chr, guide_pos, region_anno
+        sample_df (pd.DataFrame): a dataframe with sample information
+            includes columns: Name, group
+        guide_plot_df (pd.DataFrame): a dataframe with guide letters for plotting the left sequence heatmap - made by 'create_guide_df_for_plotting'
+            includes rows for each guide, and columns for the guide letter to plot at that column (or .)
+        output_folder (str): the output folder
+        file_prefix (str, optional): prefix for output folder Defaults to "CRISPRessoSea"
+        crispresso2_info (dict, optional): crispresso2_info object for this CRISPRessoSea run (Defaults to None)
         heatmap_fig_height (int, optional): the height of the heatmap figure (Defaults to 24)
         heatmap_fig_width (int, optional): the width of the heatmap figure (Defaults to 24)
         heatmap_seq_plot_ratio (int, optional): the ratio of the width of the guide sequence plot to the data plot (>1 means the seq plot is larger than the data plot) (Defaults to 1)
@@ -1987,10 +2066,14 @@ def create_plots(
         heatmap_legend_ncol (int, optional): the number of columns in the legend (if None, each value legend value will have a columns)
 
     Returns:
-        _type_: _description_
+        crispresso2_info with updated information about the added plot
     """
     sample_df_copy = sample_df[["Name", "group"]].copy()
     gene_annotations = data_df["region_anno"].tolist()
+
+    groups = sample_df_copy["group"].unique()
+    groups = [group for group in groups if group != ""]  # remove empty groups
+    groups = sorted(groups)
 
     for group in ["all", *groups]:
         plot_details = [
@@ -2074,7 +2157,7 @@ def create_plots(
             )
             if group == "all":
                 # Plotting for each DataFrame
-                df_highes_pct = data_df[
+                df_highest_pct = data_df[
                     [
                         "guide_id",
                         "guide_seq_no_gaps_with_pam",
@@ -2091,7 +2174,7 @@ def create_plots(
                     file_name = dot_plot_suffix
 
                 plot_dot_plot(
-                    df_highes_pct,
+                    df_highest_pct,
                     col_to_plot,
                     file_name,
                     sample_df_copy,
@@ -2107,7 +2190,6 @@ def create_plots(
                     crispresso2_info["results"]["general_plots"]["summary_plot_labels"][
                         file_name
                     ] = ""
-                    # TODO: Make aggregated_stats file dynamic for replot
                     crispresso2_info["results"]["general_plots"]["summary_plot_datas"][
                         file_name
                     ] = [("Aggregated Stats", "aggregated_stats_all.txt")]
@@ -2140,7 +2222,28 @@ def plot_dot_plot(df, value_suffix, file_prefix, sample_df_copy, output_folder):
     melted_df["X_label"] = melted_df.apply(
         lambda row: f"{row['guide_name']}_{row['guide_chr']}_{row['guide_pos']}", axis=1
     )
-    if not all_greater_than_10:
+    if group_counts.shape[0] <= 1:
+        plt.figure(figsize=(20, 6))
+        sns.stripplot(
+            data=melted_df,
+            x="X_label",
+            y="Value",
+            jitter=0.5,
+            s=10,
+            # markers="o",
+            alpha=0.5,
+        )
+        plt.title(f"Dot Plot of {value_suffix} by Guide Sequence and Group")
+        plt.xlabel("Guide Name")
+        plt.ylabel("Percentage")
+        plt.xticks(fontsize=8, rotation=90)
+        plt.subplots_adjust(left=0.1, right=0.9, top=0.9, bottom=0.2)
+        outfile_name = os.path.join(output_folder, file_prefix)
+        plt.savefig(outfile_name + ".pdf", bbox_inches="tight")
+        plt.savefig(outfile_name + ".png", bbox_inches="tight")
+        plt.close()
+
+    elif not all_greater_than_10:
         plt.figure(figsize=(20, 6))
         sns.stripplot(
             data=melted_df,
@@ -2331,7 +2434,7 @@ def plot_guides_and_heatmap(
     # replace y tick lables with guide names
     if guide_names is not None:
         ax1.set_yticklabels(guide_names, rotation=0, fontsize=y_tick_fontsize)
-    ax1.set_title("Guide sequences")
+    ax1.set_title("Guide sequences", fontsize=title_fontsize)
 
     # Create the second heatmap (continuous data from df_data)
     ax2 = fig.add_subplot(gs[0, 1])
@@ -2437,8 +2540,8 @@ def plot_guides_and_heatmap(
     gs.tight_layout(fig)
 
     if outfile_name is not None:
-        plt.savefig(outfile_name + ".pdf")
-        plt.savefig(outfile_name + ".png")
+        plt.savefig(outfile_name + ".pdf", bbox_inches="tight")
+        plt.savefig(outfile_name + ".png", bbox_inches="tight")
     else:
         plt.show()
 
@@ -2616,7 +2719,7 @@ def replot(
         groups = list(sample_df["group"].unique())
     except KeyError:
         groups = []
-        logger.debug(
+        debug(
             'No "group" column found in sample file. Proceeding without grouping.'
         )
     sample_cols_reordered = []
@@ -2632,12 +2735,11 @@ def replot(
     reordered_guide_df = reordered_guide_df[reordered_cols]
 
     create_plots(
-        reordered_guide_df,
-        sample_df,
-        guide_plot_df,
-        groups,
-        output_folder,
-        file_prefix,
+        data_df=reordered_guide_df,
+        sample_df=sample_df,
+        guide_plot_df=guide_plot_df,
+        output_folder=output_folder,
+        file_prefix=file_prefix,
         heatmap_fig_height=fig_height,
         heatmap_fig_width=fig_width,
         heatmap_seq_plot_ratio=seq_plot_ratio,
@@ -2649,15 +2751,188 @@ def replot(
         heatmap_legend_ncol=legend_ncol,
     )
 
+def make_guide_info_file(guide_seq_str, guide_name_str, guide_pam, genome_file, max_mismatches, max_rna_bulges, max_dna_bulges, output_folder, file_prefix):
+    """
+    Make a guide info file from a list of guides. The guide info file will contain the columns:
+    If not assigned, guide names will be assigned as "guide_0", "guide_1", etc.
+
+    params:
+    - guide_seq_str: a string of comma-separated guide sequences
+    - guide_name_str: a string of comma-separated guide names
+    - guide_pam: the PAM sequence
+    - genome_file: the genome file for input to casoffinder
+    - max_mismatches: the maximum number of mismatches between guide and off-target to search for
+    - max_rna_bulges: the maximum number of RNA bulges between guide and off-target to search for (Note that Cas-OFFinder 3 is required to detect bulges in off-targets)
+    - max_dna_bulges: the maximum number of DNA bulges between guide and off-target to search for (Note that Cas-OFFinder 3 is required to detect bulges in off-targets)
+    - output_folder: the output folder
+    - file_prefix: the prefix for the output file
+
+    """
+
+    info('Creating guide info file', {"percent_complete": 0})
+
+    casoffinder_input_file = output_folder + "/" + file_prefix + ".casoffinder_input.txt"
+    casoffinder_output_file = output_folder + "/" + file_prefix + ".casoffinder_output.txt"
+    casoffinder_log_file = output_folder + "/" + file_prefix + ".casoffinder_log.txt"
+    casoffinder_annotations = []
+
+    guide_output_file = output_folder + "/" + file_prefix + ".guide_info.txt"
+
+
+    #link in genome -- it throws a seg fault if it's in the bowtie directory
+    linked_genome = os.path.abspath(output_folder + '.genome.fa')
+    if os.path.exists(linked_genome):
+        os.remove(linked_genome)
+    os.symlink(os.path.abspath(genome_file),linked_genome)
+
+    valid_nucs = ['A','C','G','T','N']
+    guide_seqs = guide_seq_str.split(",")
+    guide_names = guide_name_str.split(",")
+
+    for guide_seq in guide_seqs:
+        for nuc in guide_seq:
+            if nuc.upper() not in valid_nucs:
+                raise Exception('Invalid nucleotide found in guide sequence "%s": %s'%(guide_seq,nuc))
+
+    while len(guide_seqs) > len(guide_names):
+        curr_guide_id = 0
+        potential_guide_name = "guide_%d" % curr_guide_id
+        if potential_guide_name not in guide_names:
+            guide_names.append(potential_guide_name)
+        curr_guide_id += 1
+
+    guide_len = max([len(x) for x in guide_seqs])
+    pam_len = len(guide_pam)
+    if not os.path.exists(casoffinder_input_file):
+        with open (casoffinder_input_file,'w') as cout:
+            cout.write(linked_genome+"\n")
+            if max_dna_bulges > 0 or max_rna_bulges > 0: ## max bulges should be written for Cas-OFFinder 3 but they mess up the output for Cas-OFFinder 2
+                cout.write("N"*guide_len + guide_pam + " " + str(max_dna_bulges) + " " + str(max_rna_bulges) + "\n")
+            else:
+                cout.write("N"*guide_len + guide_pam + "\n")
+            for guide in guide_seqs:
+                cout.write(guide + "N"*pam_len + " " + str(max_mismatches) + "\n")
+
+    casoffinder_cmd = '(%s %s C %s) &>> %s'%('cas-offinder',casoffinder_input_file,casoffinder_output_file,casoffinder_log_file)
+    ## tell the user to run this simplified command (without redirecting output to log file) if we can't run it here
+    external_casoffinder_cmd = '%s %s C %s'%('cas-offinder',casoffinder_input_file,casoffinder_output_file)
+
+    debug('Creating casoffinder command: "%s"'%casoffinder_cmd, {"percent_complete": 20})
+
+    with open (casoffinder_log_file,'w') as cout:
+        cout.write('Linking genome from %s to %s\n'%(genome_file,linked_genome))
+        cout.write('Command used:\n===\n%s\n===\nOutput:\n===\n'%casoffinder_cmd)
+
+    debug(casoffinder_cmd)
+    if not os.path.exists(casoffinder_output_file):
+        #check casoffinder
+        try:
+            casoffinder_result = subprocess.check_output('cas-offinder --version', stderr=subprocess.STDOUT, shell=True)
+        except Exception:
+            raise Exception('Error: Cas-OFFinder is required. Please run the command: "' + external_casoffinder_cmd + '" manually and then rerun')
+        if not 'Cas-OFFinder v' in str(casoffinder_result):
+            raise Exception('Error: Cas-OFFinder is required. Please run the command: "' + external_casoffinder_cmd + '" manually and then rerun')
+
+        casoffinder_result = subprocess.check_output(casoffinder_cmd,shell=True,stderr=subprocess.STDOUT).decode(sys.stdout.encoding)
+        debug('Casoffinder output:' + casoffinder_result)
+    else:
+        debug('Using previously-calculated offtargets')
+
+    os.remove(linked_genome)
+    info('Parsing casoffinder output', {"percent_complete": 60})
+
+    is_casoffinder_3 = False
+    with open(casoffinder_output_file,'r') as cin:
+        line1 = cin.readline()
+        if line1.startswith('##Generated by Cas-OFFinder 3'):
+            is_casoffinder_3 = True
+    if (max_dna_bulges > 0 or max_rna_bulges > 0) and not is_casoffinder_3:
+        warn('Note that Cas-OFFinder 3 is required to detect bulges in off-targets. Cas-OFFinder output is detected to be from Cas-OFFinder version 2. Proceeding with only mismatches.')
+
+    if is_casoffinder_3:
+        with open(casoffinder_output_file,'r') as cin:
+            info_line = cin.readline() # ##Generated by Cas-OFFinder
+            head_line = cin.readline()
+            head_line_els = head_line.strip().split("\t")
+            if head_line_els[1] != 'Bulge Type':
+                raise Exception('Cannot parse casoffinder output. Expecting "Bulge Type" in second column of header. Found: ' + head_line)
+            if head_line_els[4] != 'Chromosome':
+                raise Exception('Cannot parse casoffinder output. Expecting "Chromosome" in fifth column of header. Found: ' + head_line)
+
+            for line in cin:
+                line_els = line.strip().split("\t")
+                ontarget_seq = line_els[2][0:-pam_len]
+                chrom = line_els[4]
+                loc = line_els[5]
+                strand = line_els[6]
+                mismatch_count = int(line_els[7])
+                bulge_count = int(line_els[8])
+                total_diff_count = mismatch_count + bulge_count
+
+                guide_name = None
+                for guide_seq in guide_seqs:
+                    if ontarget_seq.replace("-","").replace("N","").upper() == guide_seq.upper():
+                        guide_name = guide_names[guide_seqs.index(guide_seq)]
+                        break
+                if guide_name is None:
+                    warn('Cannot parse casoffinder output. Cannot find guide name for guide sequence: ' + ontarget_seq)
+                    guide_name = ontarget_seq.replace("-","").replace("N","")
+                
+                offtarget_seq = line_els[3][1:-pam_len].replace("-","").replace("N","")
+                offtarget_pam = line_els[3][-pam_len:]
+
+                mismatch_string = 'Mismatches: ' + str(mismatch_count) + ', Bulges: ' + line_els[1] + ' ' + str(bulge_count)
+
+                locus_string = chrom+":"+strand+loc
+                casoffinder_annotations.append([guide_name, guide_name + "_OB" + str(total_diff_count) + "_" + chrom + "_" + loc,
+                                                     offtarget_seq, offtarget_pam, str(total_diff_count), locus_string, mismatch_string])
+    else: # parse old casoffinder output
+        with open (casoffinder_output_file,'r') as cin:
+            for line in cin:
+                line_els = line.strip().split("\t")
+                seq = line_els[0][0:-pam_len]
+                chrom = line_els[1]
+                loc = line_els[2]
+                strand = line_els[4]
+                mismatch_count = line_els[5]
+                total_diff_count = mismatch_count
+
+                offtarget_seq = line_els[3][0:-pam_len]
+                offtarget_pam = line_els[3][-pam_len:]
+
+                guide_name = None
+                for guide_seq in guide_seqs:
+                    if seq.replace("-","").upper() == guide_seq.upper():
+                        guide_name = guide_names[guide_seqs.index(guide_seq)]
+                        break
+                if guide_name is None:
+                    warn('Cannot parse casoffinder output. Cannot find guide name for guide sequence: ' + seq)
+                    guide_name = guide_seq
+
+                mismatch_string = 'Mismatches: ' + str(mismatch_count)
+
+                locus_string = chrom+":"+strand+loc
+                casoffinder_annotations.append([guide_name, guide_name + "_OB" + str(total_diff_count) + "_" + chrom + "_" + loc,offtarget_seq, offtarget_pam, str(total_diff_count), locus_string, mismatch_string])
+
+    parsed_output = pd.DataFrame(casoffinder_annotations,columns=['Name','Anno','Sequence','PAM','#MM','Locus','Mismatch_info'])
+    info('Found %d off-target sites using Cas-OFFinder'%(parsed_output.shape[0]), {'percent_complete': 80})
+
+    parsed_output = parsed_output.sort_values(by=['#MM'], ascending=True)
+
+    parsed_output.to_csv(guide_output_file, sep="\t", index=False)
+
+    info('Wrote guide info to ' + guide_output_file, {'percent_complete': 100})
 
 # main entry point
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Process multiple pooled sequencing runs"
+        description="Process multiple pooled sequencing runs",
     )
+    
     subparsers = parser.add_subparsers(
         dest="subcommand", help="Process a new run or Replot a completed run"
     )
+    ### Process
     process_parser = subparsers.add_parser(
         "Process",
         help="Process a new set of samples",
@@ -2675,7 +2950,7 @@ if __name__ == "__main__":
     process_parser.add_argument(
         "-s",
         "--sample_file",
-        help="Sample file - list of samples with one sample per line",
+        help="Sample file - list of samples with one sample per line with headers ['Name','fastq_r1','fastq_r2']",
         required=True,
     )
     process_parser.add_argument(
@@ -2686,7 +2961,7 @@ if __name__ == "__main__":
     process_parser.add_argument(
         "-x",
         "--genome_file",
-        help="Bowtie2-indexed genome file - files ending in .bt2 must be present in the folder.",
+        help="Bowtie2-indexed genome file - files ending in and .bt2 must be present in the same folder.",
         required=True,
     )
     process_parser.add_argument(
@@ -2696,6 +2971,36 @@ if __name__ == "__main__":
         type=str,
         default="8",
     )
+    process_parser.add_argument(
+        "--crispresso_quantification_window_center",
+        help="Center of quantification window to use within respect to the 3' end of the provided sgRNA sequence. Remember that the sgRNA sequence must be entered without the PAM. For cleaving nucleases, this is the predicted cleavage position. The default is -3 and is suitable for the Cas9 system. For alternate nucleases, other cleavage offsets may be appropriate, for example, if using Cpf1 this parameter would be set to 1. For base editors, this could be set to -17 to only include mutations near the 5' end of the sgRNA.",
+        default=-3,
+        type=int,
+    )
+    process_parser.add_argument(
+        "--crispresso_quantification_window_size",
+        help="Size (in bp) of the quantification window extending from the position specified by the '--cleavage_offset' or '--quantification_window_center' parameter in relation to the provided guide RNA sequence(s) (--sgRNA). Mutations within this number of bp from the quantification window center are used in classifying reads as modified or unmodified. A value of 0 disables this window and indels in the entire amplicon are considered. Default is 1, 1bp on each side of the cleavage position for a total length of 2bp.",
+        default=1,
+        type=int,
+    )
+    process_parser.add_argument(
+        "--crispresso_base_editor_output",
+        help='Outputs plots and tables to aid in analysis of base editor studies.',
+        action="store_true",
+    )
+    process_parser.add_argument(
+        "--crispresso_default_min_aln_score",
+        help="Default minimum homology score for a read to align to a reference amplicon.",
+        default=60,
+        type=int,
+    )
+    process_parser.add_argument(
+        "--crispresso_plot_window_size",
+        help="Defines the size of the window extending from the quantification window center to plot. Nucleotides within plot_window_size of the quantification_window_center for each guide are plotted.",
+        default=20,
+        type=int,
+    )
+
     process_parser.add_argument(
         "--allow_unplaced_chrs",
         help="Allow regions on unplaced chromosomes (chrUn, random, etc). By default, regions on these chromosomes are excluded. If set, regions on these chromosomes will be included.",
@@ -2722,7 +3027,37 @@ if __name__ == "__main__":
         help="If true, guides can match to regions even if the guide chr:start is not in that region (e.g. if the guide sequence is found in that region). If false/unset, guides can only match to regions matching the guide chr:start position. This flag should be set if the genome for guide design was not the same as the analysis genome.",
         action="store_true",
     )
+    process_parser.add_argument(
+        "--top_percent_cutoff",
+        help="The top percent of aligned regions (by region read depth) to consider in finding non-overlapping regions during demultiplexing. This is a float between 0 and 1. For example, if set to 0.2, the top 20%% of regions (by read depth) will be considered.",
+        default=0.2,
+        type=float,
+    )
+    process_parser.add_argument(
+        "--min_amplicon_len",
+        help="The minimum length of an amplicon to consider in finding non-overlapping regions during demultiplexing. Amplicons shorter than this will be ignored.",
+        type=int,
+        default=50,
+    )
+    process_parser.add_argument(
+        "--fail_on_pooled_fail",
+        help="If true, fail if any pooled CRISPResso run fails. By default, processing will continue even if sub-CRISPResso commands fail.",
+        action="store_true",
+    )
+    process_parser.add_argument(
+        "-v",
+        "--verbosity",
+        help="Verbosity level of output to the console (1-4) 4 is the most verbose",
+        type=int,
+        default=3,
+    )
+    process_parser.add_argument(
+        "--debug",
+        help="Print debug information",
+        action="store_true",
+    )
 
+    ### Replot
     plot_parser = subparsers.add_parser(
         "Replot",
         help="Replot completed analysis using reordered sample table",
@@ -2761,10 +3096,124 @@ if __name__ == "__main__":
         default=1,
         type=float,
     )
+    plot_parser.add_argument(
+        "-v",
+        "--verbosity",
+        help="Verbosity level of output to the console (1-4) 4 is the most verbose",
+        type=int,
+        default=3,
+    )
+    plot_parser.add_argument(
+        "--debug",
+        help="Print debug information",
+        action="store_true",
+    )
+
+    ### MakeGuideFile
+    makeguidefile_parser = subparsers.add_parser(
+        "MakeGuideFile",
+        help="Make a guide file by computationally enumerating off-targets",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    makeguidefile_parser.add_argument(
+        "-o", "--output_folder", help="Output folder", default=None
+    )
+    makeguidefile_parser.add_argument(
+        "-p",
+        "--file_prefix",
+        help="File prefix for output files",
+        default="CRISPRessoSea",
+    )
+    makeguidefile_parser.add_argument(
+        "-g",
+        "--guide_seq",
+        help="Guide sequence(s) to create a guide file for. Multiple guides may be separated by commas.",
+        required=True,
+    )
+    makeguidefile_parser.add_argument(
+        "-gn",
+        "--guide_name",
+        help="Guide name(s) to use for the guide sequence(s). Multiple names may be separated by commas.",
+        default='guide_0'
+    )
+    makeguidefile_parser.add_argument(
+        "--pam",
+        help="PAM sequence(s) to use for the guide sequence(s).",
+        default='NGG'
+    )
+    makeguidefile_parser.add_argument(
+        "-x",
+        "--genome_file",
+        help="Bowtie2-indexed genome file - files ending in and .bt2 must be present in the same folder.",
+        required=True,
+    )
+    makeguidefile_parser.add_argument(
+        "--max_mismatches",
+        help="Maximum number of mismatches to allow in the discovered offtargets",
+        default=4,
+        type=int,
+    )
+    makeguidefile_parser.add_argument(
+        "--max_dna_bulges",
+        help="Maximum number of DNA bulges to allow in the discovered offtargets. Note that Cas-OFFinder 3 is required to detect sites with bulges.",
+        default=0,
+        type=int,
+    )
+    makeguidefile_parser.add_argument(
+        "--max_rna_bulges",
+        help="Maximum number of RNA bulges to allow in the discovered offtargets. Note that Cas-OFFinder 3 is required to detect sites with bulges.",
+        default=0,
+        type=int,
+    )
+    makeguidefile_parser.add_argument(
+        "-v",
+        "--verbosity",
+        help="Verbosity level of output to the console (1-4) 4 is the most verbose",
+        type=int,
+        default=3,
+    )
+    makeguidefile_parser.add_argument(
+        "--debug",
+        help="Print debug information",
+        action="store_true",
+    )
+
+    parser.add_argument(
+        "-v",
+        "--verbosity",
+        help="Verbosity level of output to the console (1-4) 4 is the most verbose",
+        type=int,
+        default=3,
+    )
+    parser.add_argument(
+        "--debug",
+        help="Print debug information",
+        action="store_true",
+    )
 
     args = parser.parse_args()
+    CRISPRessoShared.set_console_log_level(logger, args.verbosity, args.debug)
 
-    if args.subcommand == "Replot":
+    if args.subcommand == "MakeGuideFile":
+        output_folder = args.output_folder
+        if output_folder is None:
+            output_folder = "CRISPRessoSea_MakeGuideFileOutput"
+        if not output_folder.endswith("/"):
+            output_folder += "/"
+
+        genome_file = args.genome_file
+        if not os.path.isfile(genome_file):
+            if os.path.isfile(args.genome_file+".fa"):
+                genome_file = args.genome_file+".fa"
+            if os.path.isfile(args.genome_file+".fasta"):
+                genome_file = args.genome_file+".fasta"
+        if not os.path.exists(genome_file):
+            raise Exception('Cannot find genome fasta file at ' + args.genome_file)
+
+        os.makedirs(output_folder, exist_ok=True)
+        make_guide_info_file(args.guide_seq, args.guide_name, args.pam, genome_file, args.max_mismatches, args.max_rna_bulges, args.max_dna_bulges, output_folder, args.file_prefix)
+    
+    elif args.subcommand == "Replot":
         if not os.path.isfile(args.reordered_guide_file):
             raise Exception(
                 'Reordered guide file is not found at "'
@@ -2773,7 +3222,8 @@ if __name__ == "__main__":
             )
 
         if not os.path.isfile(args.sample_file):
-            raise Exception("Sample file not found at " + args.sample_file)
+            raise Exception("Sample file not found at " + args.sample_file + "\n" + \
+                            "Please provide a sample file with headers ['Name','fastq_r1','fastq_r2']")
 
         replot(
             args.reordered_guide_file,
@@ -2787,17 +3237,9 @@ if __name__ == "__main__":
         )
 
     elif args.subcommand == "Process":
-        output_folder = args.output_folder
-        if output_folder is None:
-            output_folder = "CRISPRessoSea_output_on_" + os.path.basename(
-                args.sample_file
-            )
-        if not output_folder.endswith("/"):
-            output_folder += "/"
-        os.makedirs(output_folder, exist_ok=True)
-
         if not os.path.isfile(args.sample_file):
-            raise Exception("Sample file not found at " + args.sample_file)
+            raise Exception("Sample file not found at " + args.sample_file + "\n" + \
+                            "Please provide a sample file with headers ['Name','fastq_r1','fastq_r2']")
 
         if not os.path.isfile(args.guide_file):
             raise Exception("Guide file not found at " + args.guide_file)
@@ -2809,6 +3251,23 @@ if __name__ == "__main__":
                 "Gene annotations file not found at " + args.gene_annotations
             )
 
+        if not os.path.isfile(args.genome_file):
+            raise Exception('Cannot find genome fasta file at ' + args.genome_file)
+        index_files_exist = False
+        if os.path.isfile(args.genome_file + ".1.bt2"):
+            index_files_exist = True
+        if os.path.isfile(args.genome_file + ".1.bt2l"):
+            index_files_exist = True
+        short_genome_file_name = '.'.join(args.genome_file.split(".")[0:-1])
+        if os.path.isfile(short_genome_file_name + ".1.bt2"):
+            index_files_exist = True
+        if os.path.isfile(short_genome_file_name + ".1.bt2l"):
+            index_files_exist = True
+        if not index_files_exist:
+            raise Exception(
+                'Cannot find Bowtie2 index files for genome fasta file at ' + args.genome_file
+            )
+
         n_processes_for_sea = 1
         if args.n_processes == "max":
             n_processes_for_sea = CRISPRessoMultiProcessing.get_max_processes()
@@ -2817,21 +3276,44 @@ if __name__ == "__main__":
                 n_processes_for_sea = int(args.n_processes)
             except:
                 raise Exception('Number of processors must be an integer or "max"')
+        
+        output_folder = args.output_folder
+        if output_folder is None:
+            output_folder = "CRISPRessoSea_output_on_" + os.path.basename(
+                args.sample_file
+            )
+        if not output_folder.endswith("/"):
+            output_folder += "/"
+        os.makedirs(output_folder, exist_ok=True)
+
 
         process_pools(
+            args=args,
             sample_file=args.sample_file,
             guide_file=args.guide_file,
             genome_file=args.genome_file,
             output_folder=output_folder,
+            gene_annotations=args.gene_annotations,
             n_processors=n_processes_for_sea,
+            crispresso_quantification_window_center=args.crispresso_quantification_window_center,
+            crispresso_quantification_window_size=args.crispresso_quantification_window_size,
+            crispresso_base_editor_output=args.crispresso_base_editor_output,
+            crispresso_default_min_aln_score=args.crispresso_default_min_aln_score,
+            crispresso_plot_window_size=args.crispresso_plot_window_size,
             allow_unplaced_chrs=args.allow_unplaced_chrs,
             plot_only_complete_guides=args.plot_only_complete_guides,
             min_amplicon_coverage=args.min_amplicon_coverage,
             sort_based_on_mismatch=args.sort_based_on_mismatch,
             allow_guide_match_to_other_region_loc=args.allow_guide_match_to_other_region_loc,
+            top_percent_cutoff=args.top_percent_cutoff,
+            min_amplicon_len=args.min_amplicon_len,
+            fail_on_pooled_fail=args.fail_on_pooled_fail,
         )
     else:
         raise Exception(
-            'Please run with subcommand "Process" (to process initial analysis) or "Replot" (to replot finished analysis)'
+            'Please run with one of the following commands: \n' + 
+            '"MakeGuideFile" (to make a guide file from a given guide sequence)\n' +
+            '"Process" (to process initial analysis) \n' + 
+            '"Replot" (to replot finished analysis)'
         )
     info("Finished")
