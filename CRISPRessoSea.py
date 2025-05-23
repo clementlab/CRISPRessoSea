@@ -55,6 +55,7 @@ def process_pools(
     top_percent_cutoff=0.2,
     min_amplicon_len=50,
     fail_on_pooled_fail=False,
+    plot_group_order=None,
 ):
     """
     Discover amplicons and analyze sample editing at amplicons. This is the main entrypoint for this program.
@@ -83,6 +84,7 @@ def process_pools(
     - top_percent_cutoff: the top percent of aligned regions (by region read depth) to consider in finding non-overlapping regions. This is a float between 0 and 1. For example, if set to 0.2, the top 20% of regions (by read depth) will be considered.
     - min_amplicon_len: the minimum length of an amplicon to consider in finding non-overlapping regions. Amplicons shorter than this will be ignored.
     - fail_on_pooled_fail: if true, fail if any pooled CRISPResso run fails. Otherwise, continue even if sub-CRISPResso commands fail.
+    - plot_group_order: the order of groups to plot. If None, the default order will be used. This is a list of strings.
     """
 
     log_filename = os.path.join(output_folder, "CRISPRessoSea_RUNNING_LOG.txt")
@@ -123,69 +125,13 @@ def process_pools(
         },
     }
 
+    CRISPRessoShared.write_crispresso_info(
+        crispressoSea_info_file,
+        crispresso2_info,
+    )
+
     # Load sample file
-    if sample_file.endswith(".xlsx"):
-        sample_df = pd.read_excel(sample_file)
-    elif sample_file.endswith(".txt"):
-        sample_df = pd.read_csv(sample_file, sep="\t")
-    else:
-        # Attempt to read as tab-delimited if not xlsx or txt
-        try:
-            sample_df = pd.read_csv(sample_file, sep="\t")
-        except Exception as e:
-            raise Exception(f"Could not read sample file {sample_file}: {e}")
-
-    #check for unique 'Name' column
-    if "Name" not in sample_df.columns:
-        raise Exception(
-            'Sample file must have column "Name".\n'
-            + "Found columns: "
-            + str(list(sample_df.columns))
-        )
-    if sample_df["Name"].duplicated().any():
-        raise Exception(
-            'In sample file "' + sample_file + '" each sample must have a unique value for "Name".\n'
-            + 'Duplicated "Name" values: '
-            + str('"' + '", "'.join(sample_df[sample_df["Name"].duplicated()]["Name"].unique()) + '"')
-        )
-    print('got here 151')
-
-    # add gorup column if not present
-    if 'group' not in sample_df.columns:
-        sample_df['group'] = ''
-
-    renamed_columns = []
-    for col in sample_df.columns:
-        if col.lower() == 'fastq_r1':
-            renamed_columns.append("fastq_r1")
-        elif col.lower() == 'r1':
-            renamed_columns.append("fastq_r1")
-        elif col.lower() == 'fastq_r2':
-            renamed_columns.append("fastq_r2")
-        elif col.lower() == 'r2':
-            renamed_columns.append("fastq_r2")
-        elif col.lower() == 'name':
-            renamed_columns.append("Name")
-        elif col.lower() == 'group':
-            renamed_columns.append("group")
-        else:
-            renamed_columns.append(col)
-        
-    sample_df.columns = renamed_columns
-
-    required_columns = ["Name", "fastq_r1"]
-    for col in required_columns:
-        if col not in sample_df.columns:
-            raise Exception(
-                'Sample file must have column "'
-                + col
-                + '".\n'
-                + "Found columns: "
-                + str(list(sample_df.columns))
-                + "\n"
-                + "Expecting columns "
-                + str(required_columns)
-            )
+    sample_df = parse_sample_file(sample_file)
 
     # pull out first sample name which we will use to find amplicon locations
     first_sample = sample_df.iloc[0, :]
@@ -260,8 +206,15 @@ def process_pools(
     aggregated_stats.set_index("guide_id", inplace=True)
     sample_df["CRISPRessoPooled_output_folder"] = "NA"
 
+    start_pct_complete = 40
+    end_pct_complete = 90
+    current_pct_complete = start_pct_complete
+    step_pct_complete = (end_pct_complete - start_pct_complete) / len(sample_df)
+
     for sample_idx, sample_row in sample_df.iterrows():
         sample_name = sample_row["Name"]
+        current_pct_complete += step_pct_complete
+        info('Processing sample ' + sample_name, {'percent_complete': current_pct_complete})
         sample_r1 = sample_row["fastq_r1"]
         sample_r2 = None
         if "fastq_r2" in sample_row:
@@ -337,14 +290,7 @@ def process_pools(
         )
 
     guide_plot_df = create_guide_df_for_plotting(aggregated_stats_good)
-    guide_plot_df.index = (
-        aggregated_stats_good["guide_chr"] #these columns aren't in guide_plots_df ...
-        + ":"
-        + aggregated_stats_good["guide_pos"].astype(str)
-        + " "
-        + aggregated_stats_good["guide_name"]
-    )
-
+    guide_plot_df.index = aggregated_stats_good["guide_name"] # this column isn't in the guide_plots_df
 
     crispresso2_info = create_plots(
         data_df=aggregated_stats_good,
@@ -353,6 +299,7 @@ def process_pools(
         output_folder=output_folder,
         file_prefix=None,
         crispresso2_info=crispresso2_info,
+        plot_group_order=plot_group_order,
     )
     # Update crispresso2_info fields that depend on sample_df
     crispresso2_info["results"]["samples"] = [
@@ -384,6 +331,15 @@ def process_pools(
     make_sea_report_from_folder(
         crispressoSea_report_file, crispresso2_info, sea_folder, _root, logger
     )
+
+    CRISPRessoShared.write_crispresso_info(
+            crispressoSea_info_file,
+            crispresso2_info,
+        )
+
+    info('Analysis Complete!', {'percent_complete': 100})
+
+
 
 
 def get_jinja_loader(root, logger):
@@ -968,14 +924,15 @@ def run_initial_demux(
             ):
                 crispresso_run_is_complete = True
                 info(
-                    "CRISPResso output folder already exists for initial demultiplexing, skipping CRISPResso run"
+                    "CRISPResso output folder already exists for initial demultiplexing, skipping CRISPResso run", {'percent_complete': 40}
                 )
         except:
             pass
     if not crispresso_run_is_complete:
         info("Aligning reads to the genome to find amplicon locations")
-        info("Running command " + str(command))
+        debug("Running command " + str(command))
         subprocess.run(command, shell=True, check=True)
+        info('Finished running alignment to find amplicon locations', {'percent_complete': 40})
 
     merged_regions_file = merge_locations(
         CRISPResso_output_folder, genome_file, allow_unplaced_chrs=allow_unplaced_chrs, top_percent_cutoff=top_percent_cutoff, min_amplicon_len=min_amplicon_len, debug=False
@@ -983,6 +940,84 @@ def run_initial_demux(
 
     return merged_regions_file
 
+
+def parse_sample_file(sample_file):
+    """
+    Parse a sample file and rename columns as neccessary
+
+    params: 
+    - sample_file: path to the sample file
+
+    returns:
+    - sample_df: a pandas dataframe with the following columns:
+        Name: the name of the sample
+        fastq_r1: the path to the R1 fastq file
+        fastq_r2: the path to the R2 fastq file
+        group: the group of the sample
+    """
+    # Load sample file
+    if sample_file.endswith(".xlsx"):
+        sample_df = pd.read_excel(sample_file)
+    elif sample_file.endswith(".txt"):
+        sample_df = pd.read_csv(sample_file, sep="\t")
+    else:
+        # Attempt to read as tab-delimited if not xlsx or txt
+        try:
+            sample_df = pd.read_csv(sample_file, sep="\t")
+        except Exception as e:
+            raise Exception(f"Could not read sample file {sample_file}: {e}")
+
+    #check for unique 'Name' column
+    if "Name" not in sample_df.columns:
+        raise Exception(
+            'Sample file must have column "Name".\n'
+            + "Found columns: "
+            + str(list(sample_df.columns))
+        )
+    if sample_df["Name"].duplicated().any():
+        raise Exception(
+            'In sample file "' + sample_file + '" each sample must have a unique value for "Name".\n'
+            + 'Duplicated "Name" values: '
+            + str('"' + '", "'.join(sample_df[sample_df["Name"].duplicated()]["Name"].unique()) + '"')
+        )
+
+    renamed_columns = []
+    for col in sample_df.columns:
+        if col.lower() == 'fastq_r1':
+            renamed_columns.append("fastq_r1")
+        elif col.lower() == 'r1':
+            renamed_columns.append("fastq_r1")
+        elif col.lower() == 'fastq_r2':
+            renamed_columns.append("fastq_r2")
+        elif col.lower() == 'r2':
+            renamed_columns.append("fastq_r2")
+        elif col.lower() == 'name':
+            renamed_columns.append("Name")
+        elif col.lower() == 'group':
+            renamed_columns.append("group")
+        else:
+            renamed_columns.append(col)
+        
+    sample_df.columns = renamed_columns
+
+    # add group column if not present
+    if 'group' not in sample_df.columns:
+        sample_df['group'] = ''
+        
+    required_columns = ["Name", "fastq_r1"]
+    for col in required_columns:
+        if col not in sample_df.columns:
+            raise Exception(
+                'Sample file must have column "'
+                + col
+                + '".\n'
+                + "Found columns: "
+                + str(list(sample_df.columns))
+                + "\n"
+                + "Expecting columns "
+                + str(required_columns)
+            )
+    return sample_df
 
 def parse_guide_info(guide_file, sort_based_on_mismatch=False):
     """
@@ -1086,7 +1121,7 @@ def parse_guide_info(guide_file, sort_based_on_mismatch=False):
         else:
             this_guide_id = f'{idx}_{this_ontarget_name}_OB{str(int(row["#MM"]))}'
 
-        guide_df.loc[idx, "guide_id"] = str(idx) + " " + this_guide_id
+        guide_df.loc[idx, "guide_id"] = this_guide_id
 
         this_guide_name = this_guide_id
         if "anno" in row and row["anno"] is not None and str(row["anno"]) != "nan":
@@ -1549,16 +1584,11 @@ def run_crispresso_with_assigned_regions(
     if os.path.exists(CRISPResso_output_folder):
         try:
             crispresso_pooled_info = CRISPRessoShared.load_crispresso_info(
-                crispresso_info_file_path=CRISPResso_output_folder
-                + "/CRISPResso2Pooled_info.json"
+                crispresso_info_file_path=CRISPResso_output_folder + "/CRISPResso2Pooled_info.json"
             )
             if "end_time" in crispresso_pooled_info["running_info"]:
                 crispresso_run_is_complete = True
-                info(
-                    "CRISPResso output already exists for sample "
-                    + experiment_name
-                    + ", skipping CRISPResso run"
-                )
+                info("CRISPResso output already exists for sample " + experiment_name + ", skipping CRISPResso run")
         except:
             raise Exception("failed!")
             pass
@@ -1905,7 +1935,6 @@ def create_guide_df_for_plotting(guide_df):
     """
     aln_matrix = CRISPResso2Align.make_matrix()
 
-    names_for_plot = []
     seqs_for_plot = []
     aln_ontarget_seqs = []
     aln_offtarget_seqs = []
@@ -1918,7 +1947,6 @@ def create_guide_df_for_plotting(guide_df):
             last_guide_seq = row["guide_seq_no_gaps"] # may change this to row['ontarget_sequence'] if everything should be plotted with regard to the on-target sequence. As is, everything is plotted with regard to the vertically first time we see the guide sequence
             this_seq = row["guide_seq_no_gaps"]
             this_id = row["guide_id"]
-            names_for_plot.append(this_id)
             seqs_for_plot.append((list(this_seq), row["guide_pam"]))
             aln_ontarget_seqs.append(this_seq)
             aln_offtarget_seqs.append(this_seq)
@@ -1990,8 +2018,6 @@ def create_guide_df_for_plotting(guide_df):
                     + str(len(on_target_aln.replace("-", "")) + ")")
                 )
 
-            this_id = row["guide_id"]
-            names_for_plot.append(this_id)
             seqs_for_plot.append((this_chars_for_plot, row["guide_pam"]))
             aln_ontarget_seqs.append(on_target_aln)
             aln_offtarget_seqs.append(off_target_aln)
@@ -2030,7 +2056,7 @@ def create_plots(
     data_df,
     sample_df,
     guide_plot_df,
-    output_folder,
+    output_folder=None,
     file_prefix="CRISPRessoSea",
     crispresso2_info=None,
     heatmap_fig_height=24,
@@ -2042,6 +2068,10 @@ def create_plots(
     heatmap_nucleotide_fontsize=14,
     heatmap_legend_fontsize=20,
     heatmap_legend_ncol=None,
+    heatmap_max_value=None,
+    heatmap_min_value=None,
+    plot_group_order=None,
+    dot_plot_ylims=[None, None],
 ):
     """For each group, plot the highest_a_g_pct, highest_c_t_pct, highest_indel_pct, and tot_reads for each guide
 
@@ -2052,7 +2082,7 @@ def create_plots(
             includes columns: Name, group
         guide_plot_df (pd.DataFrame): a dataframe with guide letters for plotting the left sequence heatmap - made by 'create_guide_df_for_plotting'
             includes rows for each guide, and columns for the guide letter to plot at that column (or .)
-        output_folder (str): the output folder
+        output_folder (str): folder to write output to. If None, will be the current working directory
         file_prefix (str, optional): prefix for output folder Defaults to "CRISPRessoSea"
         crispresso2_info (dict, optional): crispresso2_info object for this CRISPRessoSea run (Defaults to None)
         heatmap_fig_height (int, optional): the height of the heatmap figure (Defaults to 24)
@@ -2064,14 +2094,22 @@ def create_plots(
         heatmap_nucleotide_fontsize (int, optional): the fontsize of the nucleotide labels in the heatmap(Defaults to 14)
         heatmap_legend_fontsize (int, optional): the fontsize of the legend title (Defaults to 20)
         heatmap_legend_ncol (int, optional): the number of columns in the legend (if None, each value legend value will have a columns)
+        heatmap_max_value (float, optional): the maximum value for the heatmap color scale (Defaults to None)
+        heatmap_min_value (float, optional): the minimum value for the heatmap color scale (Defaults to None)
+        plot_group_order (list, optional): the order of the groups to plot (Defaults to None)
+        dot_plot_ylims (list, optional): the y-axis limits [min,max] for the dot plot (Defaults to [None, None])
 
     Returns:
         crispresso2_info with updated information about the added plot
     """
-    sample_df_copy = sample_df[["Name", "group"]].copy()
     gene_annotations = data_df["region_anno"].tolist()
 
-    groups = sample_df_copy["group"].unique()
+    if output_folder is None:
+        output_folder = os.getcwd()
+    if not os.path.exists(output_folder):
+        os.makedirs(output_folder)
+
+    groups = sample_df["group"].unique()
     groups = [group for group in groups if group != ""]  # remove empty groups
     groups = sorted(groups)
 
@@ -2079,12 +2117,12 @@ def create_plots(
         plot_details = [
             {
                 "col_to_plot": "highest_a_g_pct",
-                "col_title": "Highest A/G %",
+                "col_title": "Highest A->G %",
                 "plot_suffix": "highest_a_g_pct",
             },
             {
                 "col_to_plot": "highest_c_t_pct",
-                "col_title": "Highest C/T %",
+                "col_title": "Highest C->T %",
                 "plot_suffix": "highest_c_t_pct",
             },
             {
@@ -2113,6 +2151,7 @@ def create_plots(
                     if any(col.startswith(sample_name) for sample_name in sample_names):
                         cols_to_keep.append(col)
             filtered_data_df = data_df[cols_to_keep]
+
         for plot_detail in plot_details:
             col_to_plot = plot_detail["col_to_plot"]
             if group == "all":
@@ -2153,10 +2192,11 @@ def create_plots(
                 x_tick_fontsize=heatmap_x_tick_fontsize,
                 nucleotide_fontsize=heatmap_nucleotide_fontsize,
                 legend_title_fontsize=heatmap_legend_fontsize,
+                df_data_heat_max=heatmap_max_value,
+                df_data_heat_min=heatmap_min_value,
                 legend_ncol=heatmap_legend_ncol,
             )
             if group == "all":
-                # Plotting for each DataFrame
                 df_highest_pct = data_df[
                     [
                         "guide_id",
@@ -2176,9 +2216,12 @@ def create_plots(
                 plot_dot_plot(
                     df_highest_pct,
                     col_to_plot,
+                    col_title,
                     file_name,
-                    sample_df_copy,
+                    sample_df,
                     output_folder,
+                    plot_group_order=plot_group_order,
+                    dot_plot_ylims=dot_plot_ylims,
                 )
                 if crispresso2_info is not None:
                     crispresso2_info["results"]["general_plots"][
@@ -2197,19 +2240,29 @@ def create_plots(
 
 
 # Function to melt DataFrame and plot dot plot
-def plot_dot_plot(df, value_suffix, file_prefix, sample_df_copy, output_folder):
-    group_counts = sample_df_copy["group"].value_counts()
-    all_greater_than_10 = (group_counts > 10).all()
+def plot_dot_plot(df, value_suffix, plot_title, file_prefix, sample_df, output_folder, plot_group_order=None, dot_plot_ylims=[None, None]):
+    """
+    Plots a dot plot showing average editing rate for each group
+
+    Args:
+        df (pd.DataFrame): DataFrame containing the columns 'guide_id', 'guide_seq_no_gaps_with_pam', 'guide_name', 'guide_chr', 'guide_pos' and the columns to plot
+        value_suffix (str): Suffix for the value column (e.g. 'highest_a_g_pct')
+        plot_title (str): Title for the plot (e.g. 'Highest A->G %')
+        file_prefix (str): Prefix for the output file name
+        sample_df (pd.DataFrame): DataFrame containing sample information
+        output_folder (str): Folder to save the output plot
+        plot_group_order (list, optional): Order of groups to plot. If None, groups will be sorted alphabetically.
+        dot_plot_ylims (list, optional): Y-axis limits [min,max] for the plot. Default is [None, None], which means auto-scaling.
+    """
+    group_counts = sample_df["group"].value_counts()
+    
     melted_df = pd.melt(
         df,
         id_vars=[
             "guide_id",
-            "guide_seq_no_gaps_with_pam",
             "guide_name",
-            "guide_chr",
-            "guide_pos",
         ],
-        value_vars=[col for col in df.columns if col.startswith("Sample")],
+        value_vars=[col for col in df.columns if col.endswith(value_suffix)],
         var_name="Sample",
         value_name="Value",
     )
@@ -2217,25 +2270,27 @@ def plot_dot_plot(df, value_suffix, file_prefix, sample_df_copy, output_folder):
         lambda x: x.split(f"_{value_suffix}")[0]
     )
     melted_df.drop(columns=["Sample"], inplace=True)
-    melted_df = pd.merge(melted_df, sample_df_copy, on="Name", how="left")
-    melted_df["guide_pos"] = melted_df["guide_pos"].astype(str)
-    melted_df["X_label"] = melted_df.apply(
-        lambda row: f"{row['guide_name']}_{row['guide_chr']}_{row['guide_pos']}", axis=1
-    )
-    if group_counts.shape[0] <= 1:
+
+    # melted_df now looks like this:
+    # guide_id    guide_name  Name     Value
+    # 0_Fs2_ON  guide1      sample1  0.5
+    # 1_Fs2_OFF1  guide1      sample1  0.5
+
+    if group_counts.shape[0] <= 1: # if only one group (or none)
         plt.figure(figsize=(20, 6))
         sns.stripplot(
             data=melted_df,
-            x="X_label",
+            x="guide_name",
             y="Value",
-            jitter=0.5,
+            hue="Name",
+            jitter=0.3,
             s=10,
-            # markers="o",
-            alpha=0.5,
+            alpha=0.6,
         )
-        plt.title(f"Dot Plot of {value_suffix} by Guide Sequence and Group")
+        plt.ylim(dot_plot_ylims[0], dot_plot_ylims[1])
+        plt.title(f"Dot Plot of {plot_title} by Guide")
         plt.xlabel("Guide Name")
-        plt.ylabel("Percentage")
+        plt.ylabel(plot_title)
         plt.xticks(fontsize=8, rotation=90)
         plt.subplots_adjust(left=0.1, right=0.9, top=0.9, bottom=0.2)
         outfile_name = os.path.join(output_folder, file_prefix)
@@ -2243,42 +2298,50 @@ def plot_dot_plot(df, value_suffix, file_prefix, sample_df_copy, output_folder):
         plt.savefig(outfile_name + ".png", bbox_inches="tight")
         plt.close()
 
-    elif not all_greater_than_10:
+    else:
+        melted_df_with_group = melted_df.merge(sample_df, on='Name', how='left')
+        """ this is some markdown"""
+
+        """
+        #has columns 
+        # guide_id   guide_name   Value   Name    group
+        # 0_f1_ON    gRNA_f1_ON   0.01    s1_ctl  ctl
+        # 1_f1_OB1   gRNA_f1_OB1  0.01    s1_ctl  ctl
+        """
+
+        if plot_group_order is not None:
+            melted_df_with_group['group'] = pd.Categorical(
+                melted_df_with_group['group'], categories=plot_group_order, ordered=True
+        )
+
         plt.figure(figsize=(20, 6))
         sns.stripplot(
-            data=melted_df,
-            x="X_label",
+                data=melted_df_with_group,
+                x="guide_name",
+                y="Value",
+                hue="group",
+                jitter=0.3,
+                s=5,
+                alpha=0.6,
+                palette="Dark2",
+                dodge=True,
+                legend=False
+            )
+        sns.barplot(
+            data=melted_df_with_group,
+            x="guide_name",
             y="Value",
             hue="group",
-            jitter=0.5,
-            s=10,
-            # markers="o",
-            alpha=0.5,
+            dodge=True,
+            errorbar="sd",
+            capsize=0.1,
+            palette="Set2",
         )
-        plt.title(f"Dot Plot of {value_suffix} by Guide Sequence and Group")
+
+        plt.ylim(dot_plot_ylims[0], dot_plot_ylims[1])
+        plt.title(f"{plot_title} by Guide and Group")
         plt.xlabel("Guide Name")
-        plt.ylabel("Percentage")
-        plt.xticks(fontsize=8, rotation=90)
-        plt.legend(title="Group")
-        plt.subplots_adjust(left=0.1, right=0.9, top=0.9, bottom=0.2)
-        outfile_name = os.path.join(output_folder, file_prefix)
-        plt.savefig(outfile_name + ".pdf", bbox_inches="tight")
-        plt.savefig(outfile_name + ".png", bbox_inches="tight")
-        plt.close()
-    elif all_greater_than_10:
-        plt.figure(figsize=(20, 6))
-        sns.boxplot(
-            data=melted_df,
-            x="X_label",
-            y="Value",
-            hue="group",
-            linewidth=0.5,
-            fliersize=0.5,
-            palette="Set3",
-        )
-        plt.title(f"Box Plot of {value_suffix} by Guide Sequence and Group")
-        plt.xlabel("Guide Name")
-        plt.ylabel("Percentage")
+        plt.ylabel(plot_title)
         plt.xticks(fontsize=8, rotation=90)
         plt.legend(title="Group")
         plt.subplots_adjust(left=0.1, right=0.9, top=0.9, bottom=0.2)
@@ -2296,7 +2359,6 @@ class SigMethod(Enum):
 
 def identify_significant_guides(method, df_data):
     """
-    TODO: Implement this function
     Method 1: Using a hard cutoff
     Method 2: Use Negative Binomial distribution to model the data
     Method 3: USe biological groupings to identify significant guides using a t-test
@@ -2359,7 +2421,6 @@ def plot_guides_and_heatmap(
     returns:
     - None
     """
-
     cols_to_plot = [col for col in df_data.columns if col_to_plot in col]
     if len(cols_to_plot) == 0:
         raise Exception(
@@ -2471,7 +2532,7 @@ def plot_guides_and_heatmap(
     ax_heat.collections[0].cmap.set_bad("0.7")
     ax_heat.collections[0].colorbar.ax.tick_params(labelsize=y_tick_fontsize)
     ax2.set_title(df_data_title, fontsize=title_fontsize)
-    ax2.tick_params(axis="x", labelsize=x_tick_fontsize)
+    ax2.tick_params(axis="x", labelsize=x_tick_fontsize, labelrotation=90)
     ax2.set_yticks([])
 
     info("Plotted heatmap to " + outfile_name)
@@ -2635,7 +2696,7 @@ def add_region_annotations_to_guide_df(guide_df, gene_annotations):
 
 
 def replot(
-    reordered_guide_file,
+    reordered_stats_file,
     reordered_sample_file,
     output_folder=None,
     file_prefix=None,
@@ -2649,12 +2710,16 @@ def replot(
     nucleotide_fontsize=14,  # 12
     legend_title_fontsize=20,  # 18
     legend_ncol=None,
+    plot_group_order=None,
+    dot_plot_ylims=[None, None],
+    heatmap_max_value=None,
+    heatmap_min_value=None,
 ):
     """
     Replot a completed analysis using a reordered guide file
 
     params:
-    - reordered_guide_file: the reordered guide file based on (having the same columns and layout as) a previously-completed aggregated_stats_all.txt file
+    - reordered_stats_file: the reordered stats file based on (having the same columns and layout as) a previously-completed aggregated_stats_all.txt file
     - reordered_sample_file: path to the sample file with headers: Name, group, fastq_r1, fastq_r2 (group is always optional, fastq_r2 is optional for single-end reads)
     - output_folder: the output folder for the output plots
     - file_prefix: the prefix for the output plots
@@ -2668,74 +2733,39 @@ def replot(
     - nucleotide_fontsize: the fontsize of the nucleotide labels for the heatmap
     - legend_title_fontsize: the fontsize of the legend title for the heatmap
     - legend_ncol: the number of columns in the legend for the heatmap (if None, each value legend value will have a columns)
+    - plot_group_order: the order of the groups to plot (if None, the groups will be sorted alphabetically)
+    - heatmap_max_value: the maximum value for the heatmap color scale (if None, the maximum value will be determined automatically)
+    - heatmap_min_value: the minimum value for the heatmap color scale (if None, the minimum value will be determined automatically)
     """
 
-    if reordered_sample_file.endswith(".xlsx"):
-        sample_df = pd.read_excel(reordered_sample_file)
-    elif reordered_sample_file.endswith(".txt"):
-        sample_df = pd.read_csv(reordered_sample_file, sep="\t")
-    else:
-        # Attempt to read as tab-delimited if not xlsx or txt
-        try:
-            sample_df = pd.read_csv(reordered_sample_file, sep="\t")
-        except Exception as e:
-            raise Exception(f"Could not read sample file {reordered_sample_file}: {e}")
+    sample_df = parse_sample_file(reordered_sample_file)
 
     if output_folder is not None:
         if not os.path.exists(output_folder):
             os.makedirs(output_folder, exist_ok=True)
-    # if output_folder is not None and file_prefix is not None:
-    #     output_root = output_folder + "/" + file_prefix + "."
-    # elif file_prefix is not None:
-    #     output_root = file_prefix + "."
-    # elif output_folder is not None:
-    #     output_root = output_folder + "CRISPRessoSea."
-    # else:
-    #     output_root = "CRISPRessoSea."
-    reordered_guide_df = pd.read_csv(reordered_guide_file, sep="\t")
-    guide_plot_df = create_guide_df_for_plotting(reordered_guide_df)
 
-    if name_column is None:
-        guide_plot_df.index = (
-            reordered_guide_df["guide_chr"]
-            + ":"
-            + reordered_guide_df["guide_pos"].astype(str)
-            + " "
-            + reordered_guide_df["guide_name"]
-        )
-    else:
-        if name_column not in reordered_guide_df.columns:
-            raise Exception(
-                "Name column "
-                + name_column
-                + " not found in reordered guide columns. Columns are: "
-                + str(reordered_guide_df.columns)
-            )
-        guide_plot_df.index = reordered_guide_df[name_column]
+    reordered_stats_df = pd.read_csv(reordered_stats_file, sep="\t")
+    guide_plot_df = create_guide_df_for_plotting(reordered_stats_df)
 
-    info("Plotting for " + str(len(reordered_guide_df)) + " guides")
+    info("Plotting for " + str(len(reordered_stats_df)) + " guides", {"percent_complete": 20})
 
-    try:
-        groups = list(sample_df["group"].unique())
-    except KeyError:
-        groups = []
-        debug(
-            'No "group" column found in sample file. Proceeding without grouping.'
-        )
+    # reorder the stats column to the order of the sample file
     sample_cols_reordered = []
     for sample in sample_df["Name"]:
-        for col in reordered_guide_df.columns:
+        for col in reordered_stats_df.columns:
             if col.startswith(sample):
                 sample_cols_reordered.append(col)
+
     reordered_cols = []
-    for col in reordered_guide_df.columns:
+    for col in reordered_stats_df.columns:
         if col not in sample_cols_reordered:
             reordered_cols.append(col)
+
     reordered_cols += sample_cols_reordered
-    reordered_guide_df = reordered_guide_df[reordered_cols]
+    reordered_stats_df = reordered_stats_df[reordered_cols]
 
     create_plots(
-        data_df=reordered_guide_df,
+        data_df=reordered_stats_df,
         sample_df=sample_df,
         guide_plot_df=guide_plot_df,
         output_folder=output_folder,
@@ -2749,7 +2779,13 @@ def replot(
         heatmap_nucleotide_fontsize=nucleotide_fontsize,
         heatmap_legend_fontsize=legend_title_fontsize,
         heatmap_legend_ncol=legend_ncol,
+        heatmap_max_value=heatmap_max_value,
+        heatmap_min_value=heatmap_min_value,
+        plot_group_order=plot_group_order,
+        dot_plot_ylims=dot_plot_ylims,
     )
+
+    info('Replotting complete', {"percent_complete": 100})
 
 def make_guide_info_file(guide_seq_str, guide_name_str, guide_pam, genome_file, max_mismatches, max_rna_bulges, max_dna_bulges, output_folder, file_prefix):
     """
@@ -3045,6 +3081,12 @@ if __name__ == "__main__":
         action="store_true",
     )
     process_parser.add_argument(
+        "--plot_group_order",
+        help="Order of the groups to plot (if None, the groups will be sorted alphabetically)",
+        default=None,
+        type=str,
+    )
+    process_parser.add_argument(
         "-v",
         "--verbosity",
         help="Verbosity level of output to the console (1-4) 4 is the most verbose",
@@ -3064,7 +3106,7 @@ if __name__ == "__main__":
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     plot_parser.add_argument(
-        "-o", "--output_folder", help="Output folder", default=None
+        "-o", "--output_folder", help="Output folder where output plots should be placed", default=None
     )
     plot_parser.add_argument(
         "-p",
@@ -3074,8 +3116,14 @@ if __name__ == "__main__":
     )
     plot_parser.add_argument(
         "-f",
-        "--reordered_guide_file",
-        help="Reordered guide file - made by reordering rows from aggregated_stats_all.txt",
+        "--reordered_stats_file",
+        help="Reordered statistics file - made by reordering rows from aggregated_stats_all.txt",
+        required=True,
+    )
+    plot_parser.add_argument(
+        "-s",
+        "--reordered_sample_file",
+        help="Reordered_sample_file - path to the sample file with headers: Name, group, fastq_r1, fastq_r2 (group is always optional, fastq_r2 is optional for single-end reads)",
         required=True,
     )
     plot_parser.add_argument(
@@ -3094,6 +3142,30 @@ if __name__ == "__main__":
         "--seq_plot_ratio",
         help="Ratio of the width of the sequence plot to the data plot (>1 means the seq plot is larger than the data plot)",
         default=1,
+        type=float,
+    )
+    plot_parser.add_argument(
+        "--plot_group_order",
+        help="Order of the groups to plot (if None, the groups will be sorted alphabetically)",
+        default=None,
+        type=str,
+    )
+    plot_parser.add_argument(
+        "--dot_plot_ylims",
+        help="Comma-separated min,max y-axis limits for the dot plot. If None, the y-axis limits will be set automatically.",
+        default='None,None',
+        type=str,
+    )
+    plot_parser.add_argument(
+        "--heatmap_max_value",
+        help="Maximum value for the heatmap color scale, where a value of 1 sets the max value color to 1% (if None, the maximum value will be determined automatically)",
+        default=None,
+        type=float,
+    )
+    plot_parser.add_argument(
+        "--heatmap_min_value",
+        help="Minimum value for the heatmap color scale, where a value of 1 sets the min value color to 1% (if None, the minimum value will be determined automatically)",
+        default=None,
         type=float,
     )
     plot_parser.add_argument(
@@ -3214,26 +3286,52 @@ if __name__ == "__main__":
         make_guide_info_file(args.guide_seq, args.guide_name, args.pam, genome_file, args.max_mismatches, args.max_rna_bulges, args.max_dna_bulges, output_folder, args.file_prefix)
     
     elif args.subcommand == "Replot":
-        if not os.path.isfile(args.reordered_guide_file):
+        if not os.path.isfile(args.reordered_stats_file):
             raise Exception(
-                'Reordered guide file is not found at "'
-                + args.reordered_guide_file
+                'Reordered statistics file is not found at "'
+                + args.reordered_stats_file
                 + '". Use an aggregated_stats_all.txt file from a previous run as a template.'
             )
 
-        if not os.path.isfile(args.sample_file):
+        if not os.path.isfile(args.reordered_sample_file):
             raise Exception("Sample file not found at " + args.sample_file + "\n" + \
                             "Please provide a sample file with headers ['Name','fastq_r1','fastq_r2']")
+        
+        plot_group_order = None
+        if args.plot_group_order is not None:
+            plot_group_order = args.plot_group_order.split(",")
+            for group in plot_group_order:
+                if group not in list(pd.read_csv(args.sample_file, sep="\t")["group"].unique()):
+                    raise Exception("In parsing group order (" + args.plot_group_order + ") group " + group + " not found in sample file")
+
+        dot_plot_ylims = [None, None]
+        if args.dot_plot_ylims is not None:
+            try:
+                dot_plot_ylim_vals = args.dot_plot_ylims.split(",")
+                if len(dot_plot_ylim_vals) != 2:
+                    raise Exception(
+                        "Dot plot ylims must be a comma-separated list of two values"
+                    )
+                if dot_plot_ylim_vals[0] != "None":
+                    dot_plot_ylims[0] = float(dot_plot_ylim_vals[0])
+                if dot_plot_ylim_vals[1] != "None":
+                    dot_plot_ylims[1] = float(dot_plot_ylim_vals[1])
+            except Exception as e:
+                raise Exception("Could not parse dot plot ylims: " + str(e))
 
         replot(
-            args.reordered_guide_file,
-            args.sample_file,
+            args.reordered_stats_file,
+            args.reordered_sample_file,
             args.output_folder,
             args.file_prefix,
             name_column=args.name_column,
             fig_height=args.fig_height,
             fig_width=args.fig_width,
             seq_plot_ratio=args.seq_plot_ratio,
+            plot_group_order=plot_group_order,
+            dot_plot_ylims=dot_plot_ylims,
+            heatmap_max_value=args.heatmap_max_value,
+            heatmap_min_value=args.heatmap_min_value,
         )
 
     elif args.subcommand == "Process":
@@ -3286,6 +3384,14 @@ if __name__ == "__main__":
             output_folder += "/"
         os.makedirs(output_folder, exist_ok=True)
 
+        plot_group_order = None
+        if args.plot_group_order is not None:
+            plot_group_order = args.plot_group_order.split(",")
+            for group in plot_group_order:
+                if group not in list(pd.read_csv(args.sample_file, sep="\t")["group"].unique()):
+                    raise Exception("In parsing group order (" + args.plot_group_order + ") group " + group + " not found in sample file")
+
+
 
         process_pools(
             args=args,
@@ -3308,6 +3414,7 @@ if __name__ == "__main__":
             top_percent_cutoff=args.top_percent_cutoff,
             min_amplicon_len=args.min_amplicon_len,
             fail_on_pooled_fail=args.fail_on_pooled_fail,
+            plot_group_order=plot_group_order,
         )
     else:
         raise Exception(
@@ -3316,4 +3423,3 @@ if __name__ == "__main__":
             '"Process" (to process initial analysis) \n' + 
             '"Replot" (to replot finished analysis)'
         )
-    info("Finished")
