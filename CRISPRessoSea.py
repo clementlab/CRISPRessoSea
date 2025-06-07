@@ -1272,14 +1272,14 @@ def make_target_region_assignments(
             # next, check if the target position is within the region
             is_pos_match = False
             if (
-                target_chr == region_chr
+                str(target_chr) == str(region_chr)
                 and target_pos >= region_start
                 and target_pos <= region_end
             ):
                 this_target_region_matches.append(region_name)
                 is_pos_match = True
             elif (
-                target_chr.replace("chr", "") == region_chr.replace("chr", "")
+                str(target_chr).replace("chr", "") == str(region_chr).replace("chr", "")
                 and target_pos >= region_start
                 and target_pos <= region_end
             ):
