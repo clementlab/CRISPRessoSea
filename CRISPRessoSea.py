@@ -1,26 +1,33 @@
 import argparse
-from enum import Enum
 import glob
 import logging
-import os
-import subprocess
-import sys
-from collections import defaultdict
-from copy import deepcopy
-
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
+import os
 import pandas as pd
 import seaborn as sns
+import subprocess
+import sys
+import scipy.stats as sp
+import statsmodels.api as sm
+
+
 from CRISPResso2 import CRISPResso2Align, CRISPRessoMultiProcessing, CRISPRessoShared
 from CRISPResso2.CRISPRessoReports import CRISPRessoReport
+
+from collections import defaultdict
+from copy import deepcopy
+from enum import Enum
 from jinja2 import Environment, FileSystemLoader, make_logging_undefined
 from matplotlib.colors import ListedColormap
+from statsmodels.api import GLM, families
+from statsmodels.stats.multitest import multipletests
+from statsmodels.discrete.discrete_model import NegativeBinomial
 
 mpl.rcParams["pdf.fonttype"] = 42
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 C2PRO_INSTALLED = False
 
@@ -37,7 +44,7 @@ info = logger.info
 def process_pools(
     args,
     sample_file,
-    guide_file,
+    target_file,
     genome_file,
     output_folder,
     gene_annotations=None,
@@ -48,21 +55,22 @@ def process_pools(
     crispresso_default_min_aln_score=20,
     crispresso_plot_window_size=20,
     allow_unplaced_chrs=False,
-    plot_only_complete_guides=False,
+    plot_only_complete_targets=False,
     min_amplicon_coverage=100,
     sort_based_on_mismatch=False,
-    allow_guide_match_to_other_region_loc=False,
+    allow_target_match_to_other_region_loc=False,
     top_percent_cutoff=0.2,
     min_amplicon_len=50,
     fail_on_pooled_fail=False,
     plot_group_order=None,
+    sig_method_parameters=None,
 ):
     """
     Discover amplicons and analyze sample editing at amplicons. This is the main entrypoint for this program.
 
     params:
     - sample_file: path to the sample file with headers: Name, group, fastq_r1, fastq_r2 (group is always optional, fastq_r2 is optional for single-end reads)
-    - guide_file: path to the guide file with headers: Name, Sequence, PAM, #MM, Locus (may include other columns)
+    - target_file: path to the target file with headers: Guide, Sequence, PAM, #MM, Locus (may include other columns)
     - genome_file: path to the genome file (not including the trailing .fa)
     - output_folder: path to the output folder to produce data
     - gene_annotations: the path to the gene annotations file. This function expects a column for:
@@ -77,14 +85,15 @@ def process_pools(
     - crispresso_default_min_aln_score: the minimum alignment score to use for CRISPResso2. This will be used for CRISPResso2 subruns and corresponds to the parameter --default_min_aln_score. If None, the default value of 20 will be used.
     - crispresso_plot_window_size: the window size to use for CRISPResso2 plots. This will be used for CRISPResso2 subruns and corresponds to the parameter --plot_window_size. If None, the default value of 20 will be used.
     - allow_unplaced_chrs: whether to allow regions to be identified on unplaced chromosomes (chrUn, random, etc).
-    - plot_only_complete_guides: whether to plot only guides with data in all samples
+    - plot_only_complete_targets: whether to plot only targets with data in all samples
     - min_amplicon_coverage: the minimum number of reads required to consider an amplicon
-    - sort_based_on_mismatch: if true, guides are sorted based on mismatch count. If false, guides are presented in file order
-    - allow_guide_match_to_other_region_loc: if true, guides can match regions based on sequence even if not in the same pos.
+    - sort_based_on_mismatch: if true, targets are sorted based on mismatch count. If false, targets are presented in file order
+    - allow_target_match_to_other_region_loc: if true, targets can match regions based on sequence even if not in the same pos.
     - top_percent_cutoff: the top percent of aligned regions (by region read depth) to consider in finding non-overlapping regions. This is a float between 0 and 1. For example, if set to 0.2, the top 20% of regions (by read depth) will be considered.
     - min_amplicon_len: the minimum length of an amplicon to consider in finding non-overlapping regions. Amplicons shorter than this will be ignored.
     - fail_on_pooled_fail: if true, fail if any pooled CRISPResso run fails. Otherwise, continue even if sub-CRISPResso commands fail.
     - plot_group_order: the order of groups to plot. If None, the default order will be used. This is a list of strings.
+    - sig_method_parameters: the parameters to use for the significance method. 
     """
 
     log_filename = os.path.join(output_folder, "CRISPRessoSea_RUNNING_LOG.txt")
@@ -97,7 +106,7 @@ def process_pools(
     with open(log_filename, "w+") as outfile:
         outfile.write("[Command used]:\n%s\n\n[Execution log]:\n" % " ".join(sys.argv))
 
-    crispressoSea_info_file = os.path.join(output_folder, "CRISPResso2Sea_info.json")
+    crispressoSea_info_file = os.path.join(output_folder, "CRISPRessoSea_info.json")
 
     crispresso2_info = {
         "running_info": {
@@ -190,20 +199,20 @@ def process_pools(
         fail_on_pooled_fail=fail_on_pooled_fail,
     )
 
-    crispresso_region_file, guide_df, region_df = make_guide_region_assignments(
+    crispresso_region_file, target_df, region_df = make_target_region_assignments(
         merged_region_info_file,
-        guide_file,
+        target_file,
         output_folder,
         sort_based_on_mismatch,
-        allow_guide_match_to_other_region_loc=allow_guide_match_to_other_region_loc,
+        allow_target_match_to_other_region_loc=allow_target_match_to_other_region_loc,
     )
     if gene_annotations is not None:
-        guide_df = add_region_annotations_to_guide_df(guide_df, gene_annotations)
+        target_df = add_region_annotations_to_target_df(target_df, gene_annotations)
     else:
-        guide_df["region_anno"] = ""
+        target_df["region_anno"] = ""
 
-    aggregated_stats = guide_df.copy()
-    aggregated_stats.set_index("guide_id", inplace=True)
+    aggregated_stats = target_df.copy()
+    aggregated_stats.set_index("target_id", inplace=True)
     sample_df["CRISPRessoPooled_output_folder"] = "NA"
 
     start_pct_complete = 40
@@ -236,70 +245,63 @@ def process_pools(
         )
         sample_df.loc[sample_idx, "CRISPRessoPooled_output_folder"] = this_pooled_run
         if this_pooled_run is not None:
-            guide_summary_file, guide_summary_df = analyze_run(
+            target_summary_file, target_summary_df = analyze_run(
                 os.path.join(summary_output_folder, sample_name),
                 this_pooled_run,
-                guide_df,
+                target_df,
                 region_df,
             )
-            sample_df.loc[sample_idx, "guide_summary_file"] = guide_summary_file
+            sample_df.loc[sample_idx, "target_summary_file"] = target_summary_file
 
-            guide_summary_df.columns = ["guide_id", "guide_label"] + [
-                sample_name + "_" + x for x in guide_summary_df.columns[2:]
+            target_summary_df.columns = ["target_id", "target_label"] + [
+                sample_name + "_" + x for x in target_summary_df.columns[2:]
             ]
-            guide_summary_df.drop(columns=["guide_label"], inplace=True)
+            target_summary_df.drop(columns=["target_label"], inplace=True)
 
-            aggregated_stats = pd.merge(
-                aggregated_stats, guide_summary_df, how="left", on="guide_id"
-            )
+            aggregated_stats = pd.merge(aggregated_stats, target_summary_df, how="left", on="target_id")
 
-            # for the columns in guide_summary_df, if tot_reads is less than min_amplicon_coverage, set all other columns to NA
-            for col in guide_summary_df.columns:
+            # for the columns in target_summary_df, if tot_reads is less than min_amplicon_coverage, set all other columns to NA
+            for col in target_summary_df.columns:
                 if col.startswith(sample_name) and col != sample_name + "_tot_reads":
-                    aggregated_stats.loc[
-                        aggregated_stats[sample_name + "_tot_reads"]
-                        < min_amplicon_coverage,
-                        col,
-                    ] = np.nan
+                    aggregated_stats.loc[aggregated_stats[sample_name + "_tot_reads"] < min_amplicon_coverage, col] = np.nan
             completed_samples.append(sample_name)
 
     aggregated_stats.sort_values(by="sort_index", inplace=True)
-    aggregated_stats.to_csv(
-        os.path.join(output_folder, "aggregated_stats_all.txt"), sep="\t", index=False
-    )
+    aggregated_stats.fillna('NA').to_csv(os.path.join(output_folder, "aggregated_stats_all.txt"), sep="\t", index=False)
 
-    aggregated_stats["guide_id"] = aggregated_stats["guide_id"].apply(
+    aggregated_stats["target_id"] = aggregated_stats["target_id"].apply(
         lambda x: x.split(" ")[-1]
     )
 
-    if plot_only_complete_guides:
+    if plot_only_complete_targets:
         aggregated_stats_good = aggregated_stats.dropna()
         info(
             "Plotting for "
             + str(len(aggregated_stats_good))
             + "/"
             + str(len(aggregated_stats))
-            + " guides after removing guides missing data in any samples"
+            + " targets after removing targets missing data in any samples"
         )
     else:
         aggregated_stats_good = aggregated_stats
         info(
             "Plotting for "
             + str(len(aggregated_stats_good))
-            + " guides"
+            + " targets"
         )
 
-    guide_plot_df = create_guide_df_for_plotting(aggregated_stats_good)
-    guide_plot_df.index = aggregated_stats_good["guide_name"] # this column isn't in the guide_plots_df
+    target_plot_df = create_target_df_for_plotting(aggregated_stats_good)
+    target_plot_df.index = aggregated_stats_good["target_name"] # this column isn't in the target_plot_df
 
     crispresso2_info = create_plots(
         data_df=aggregated_stats_good,
         sample_df=sample_df,
-        guide_plot_df=guide_plot_df,
+        target_plot_df=target_plot_df,
         output_folder=output_folder,
         file_prefix=None,
         crispresso2_info=crispresso2_info,
         plot_group_order=plot_group_order,
+        sig_method_parameters=sig_method_parameters
     )
     # Update crispresso2_info fields that depend on sample_df
     crispresso2_info["results"]["samples"] = [
@@ -565,9 +567,9 @@ def make_sea_report_from_folder(
             summary_plot_datas[plot_name] = {}
 
     summary_stats = crispresso2_info["results"]["summary_stats"]
-    targets = list(summary_stats["guide_name"])
-    chroms = list(summary_stats["guide_chr"])
-    positions = list(summary_stats["guide_pos"])
+    targets = list(summary_stats["target_name"])
+    chroms = list(summary_stats["target_chr"])
+    positions = list(summary_stats["target_pos"])
     if "region_anno" in summary_stats:
         annotations = list(summary_stats.get("region_anno"))
     else:
@@ -724,6 +726,10 @@ def merge_locations(
     good_nonoverlapping_regions = []
     region_df = pd.read_csv(genome_read_counts_file, sep="\t")
     region_df_sub = region_df.sort_values(by="number of reads", ascending=False)
+
+    #filter first by amplicon length
+    region_df_sub['length'] = region_df_sub['end'] - region_df_sub['start']
+    region_df_sub = region_df_sub[region_df_sub['length'] >= min_amplicon_len]
 
     top_percent_count = int(len(region_df_sub) * top_percent_cutoff)
     region_df_sub = region_df_sub.head(top_percent_count)
@@ -967,20 +973,6 @@ def parse_sample_file(sample_file):
         except Exception as e:
             raise Exception(f"Could not read sample file {sample_file}: {e}")
 
-    #check for unique 'Name' column
-    if "Name" not in sample_df.columns:
-        raise Exception(
-            'Sample file must have column "Name".\n'
-            + "Found columns: "
-            + str(list(sample_df.columns))
-        )
-    if sample_df["Name"].duplicated().any():
-        raise Exception(
-            'In sample file "' + sample_file + '" each sample must have a unique value for "Name".\n'
-            + 'Duplicated "Name" values: '
-            + str('"' + '", "'.join(sample_df[sample_df["Name"].duplicated()]["Name"].unique()) + '"')
-        )
-
     renamed_columns = []
     for col in sample_df.columns:
         if col.lower() == 'fastq_r1':
@@ -999,6 +991,20 @@ def parse_sample_file(sample_file):
             renamed_columns.append(col)
         
     sample_df.columns = renamed_columns
+
+    #check for unique 'Name' column
+    if "Name" not in sample_df.columns:
+        raise Exception(
+            'Sample file must have column "Name".\n'
+            + "Found columns: "
+            + str(list(sample_df.columns))
+        )
+    if sample_df["Name"].duplicated().any():
+        raise Exception(
+            'In sample file "' + sample_file + '" each sample must have a unique value for "Name".\n'
+            + 'Duplicated "Name" values: '
+            + str('"' + '", "'.join(sample_df[sample_df["Name"].duplicated()]["Name"].unique()) + '"')
+        )
 
     # add group column if not present
     if 'group' not in sample_df.columns:
@@ -1019,75 +1025,91 @@ def parse_sample_file(sample_file):
             )
     return sample_df
 
-def parse_guide_info(guide_file, sort_based_on_mismatch=False):
+def parse_target_info(target_file, sort_based_on_mismatch=False):
     """
-    Parse a guide file in tab-separated or xls format. Required columns are:
-        Name: the name of the on-target guide
+    Parse a target file listing targets in tab-separated or xls format. Required columns are:
+        Guide: the name of the on-target guide
         Sequence: the sequence of the target site (either on-target or off-target)
         PAM: the PAM at the target site
-        #MM: the number of mismatches between the on- and off-target. If this is 0 or NA, this guide is considered the on-target
+        #MM: the number of mismatches between the on- and off-target. If this is 0 or NA, this target is considered the on-target
         Locus: the locus of the target site in the genome, in the format chr:pos or chr:+pos for positive strand or chr:-pos for negative strand
 
     Optional column:
-    anno: an annotation name for the guide
+    anno or target: an annotation name for the target site
 
     params:
-    guide_file: path to the guide file
-    sort_based_on_mismatch: if true, guides are sorted based on mismatch count. If false, guides are presented in the order they are in the file
+    target_file: path to the target file
+    sort_based_on_mismatch: if true, targets are sorted based on mismatch count. If false, targets are presented in the order they are in the file
 
-    The On-target for each guide is the guide with the fewest mismatches (may not necessarily be 0MM for retargeting guides). If there are multiple guides with the same number of mismatches, the first one is used.
+    The On-target for each target is the target with the fewest mismatches (may not necessarily be 0MM for retargeting guides). If there are multiple targets with the same number of mismatches, the first one is used.
 
     Returns:
     - a pandas dataframe with the following columns for processing:
-        guide_id: a unique identifier for the guide
-        guide_name: the name of the guide
-        sort_index: the index of the guide in the original file
-        guide_chr: the chromosome of the guide
-        guide_pos: the position of the guide
-        guide_seq_no_gaps_with_pam: the guide sequence without gaps and with PAM
-        guide_seq_no_gaps: the guide sequence without gaps
-        guide_seq_with_gaps: the guide sequence with gaps
-        guide_pam: the guide pam sequence
+        target_id: a unique identifier for the target
+        target_name: the name of the target
+        sort_index: the index of the target in the original file
+        target_chr: the chromosome of the target
+        target_pos: the position of the target
+        target_seq_no_gaps_with_pam: the target sequence without gaps and with PAM
+        target_seq_no_gaps: the target sequence without gaps
+        target_seq_with_gaps: the target sequence with gaps
+        target_pam: the target pam sequence
         ontarget_name: the name of the on-target guide
         ontarget_sequence: the sequence of the on-target guide
     """
-    if not os.path.exists(guide_file):
-        raise Exception("Guide file not found at " + guide_file)
+    if not os.path.exists(target_file):
+        raise Exception("Target file not found at " + target_file)
 
-    if guide_file.endswith(".xlsx"):
-        guide_df = pd.read_excel(guide_file)
+    if target_file.endswith(".xlsx"):
+        target_df = pd.read_excel(target_file)
     else:
-        guide_df = pd.read_csv(guide_file, sep="\t")
+        target_df = pd.read_csv(target_file, sep="\t")
 
-    required_columns = ["Name", "Sequence", "PAM", "#MM", "Locus"]
+    required_columns = ["Guide", "Sequence", "PAM", "#MM", "Locus"]
+
+    renamed_columns = []
+    for col in target_df.columns:
+        col_is_in_required = False
+        for required_col in required_columns:
+            if col.lower() == required_col.lower():
+                renamed_columns.append(required_col)
+                col_is_in_required = True
+                break
+        if col_is_in_required:
+            pass
+        elif col.lower() == 'seq':
+            renamed_columns.append("Sequence")
+        elif col.lower() == 'mismatches' or col.lower() == 'mm':
+            renamed_columns.append("#MM")
+        elif col.lower() == 'loc' or col.lower() == 'location':
+            renamed_columns.append("locus")
+        else:
+            renamed_columns.append(col)
+        
+    target_df.columns = renamed_columns
 
     for col in required_columns:
-        if col not in guide_df.columns:
+        if col not in target_df.columns:
             raise Exception(
-                'Guide file must have column "'
-                + col
-                + '".\n'
-                + "Found columns: "
-                + str(list(guide_df.columns))
-                + "\n"
-                + "Expecting columns "
-                + str(required_columns)
+                'Target file must have column "' + col + '".\n'
+                + "Found columns: " + str(list(target_df.columns)) + "\n"
+                + "Expecting columns " + str(required_columns)
             )
 
-    guide_df["#MM"] = guide_df["#MM"].fillna(0).astype(int)
-    guide_df["sort_index"] = guide_df.index
+    target_df["#MM"] = target_df["#MM"].fillna(0).astype(int)
+    target_df["sort_index"] = target_df.index
 
-    on_targets = guide_df.sort_values(by=["#MM", "sort_index"]).drop_duplicates(
-        subset="Name", keep="first"
+    on_targets = target_df.sort_values(by=["#MM", "sort_index"]).drop_duplicates(
+        subset="Guide", keep="first"
     )
     if sort_based_on_mismatch:
-        guide_df["sort_index"] = list(range(1, guide_df.shape[0]))
+        target_df["sort_index"] = list(range(1, target_df.shape[0]))
 
     for idx, row in on_targets.iterrows():
         if row["#MM"] != 0:
             warn(
-                "Warning: On-target guide "
-                + row["Name"]
+                "Warning: On-target target "
+                + row["Guide"]
                 + " has "
                 + str(row["#MM"])
                 + " mismatches (expecting 0 mismatches for on-target)"
@@ -1095,40 +1117,42 @@ def parse_guide_info(guide_file, sort_based_on_mismatch=False):
 
     ontarget_seqs = {}
     for idx, row in on_targets.iterrows():
-        ontarget_seqs[row["Name"]] = row["Sequence"]
+        ontarget_seqs[row["Guide"]] = row["Sequence"]
 
-    guide_df["ontarget_name"] = "NA"
-    guide_df["ontarget_sequence"] = "NA"
-    guide_df["guide_id"] = "NA"  # unique id
-    guide_df["guide_name"] = "NA"  # may be supplied by user
-    guide_df["guide_chr"] = "NA"
-    guide_df["guide_pos"] = "NA"
-    guide_df["guide_seq_with_gaps"] = guide_df["Sequence"]
-    guide_df["guide_pam"] = guide_df["PAM"]
-    guide_df["guide_seq_no_gaps"] = "NA"
-    guide_df["guide_seq_no_gaps_with_pam"] = "NA"
-    for idx, row in guide_df.iterrows():
-        this_ontarget_name = row["Name"]
+    target_df["ontarget_name"] = "NA"
+    target_df["ontarget_sequence"] = "NA"
+    target_df["target_id"] = "NA"  # unique id
+    target_df["target_name"] = "NA"  # may be supplied by user
+    target_df["target_chr"] = "NA"
+    target_df["target_pos"] = "NA"
+    target_df["target_seq_with_gaps"] = target_df["Sequence"]
+    target_df["target_pam"] = target_df["PAM"]
+    target_df["target_seq_no_gaps"] = "NA"
+    target_df["target_seq_no_gaps_with_pam"] = "NA"
+    for idx, row in target_df.iterrows():
+        this_ontarget_name = row["Guide"]
         if this_ontarget_name not in ontarget_seqs:
             raise Exception(
-                "On-target sequence not found for guide "
+                "On-target sequence not found for target "
                 + this_ontarget_name
                 + ". Found ontargets: "
                 + str(list(ontarget_seqs.keys()))
             )
         if str(row["#MM"]) == "0":
-            this_guide_id = f'{idx}_{this_ontarget_name}_ON'
+            this_target_id = f'{idx}_{this_ontarget_name}_ON'
         else:
-            this_guide_id = f'{idx}_{this_ontarget_name}_OB{str(int(row["#MM"]))}'
+            this_target_id = f'{idx}_{this_ontarget_name}_OB{str(int(row["#MM"]))}'
 
-        guide_df.loc[idx, "guide_id"] = this_guide_id
+        target_df.loc[idx, "target_id"] = this_target_id
 
-        this_guide_name = this_guide_id
+        this_target_name = this_target_id
+        if "target" in row and row["target"] is not None and str(row["target"]) != "nan":
+            this_target_name = row["target"]
+        if "Target" in row and row["Target"] is not None and str(row["Target"]) != "nan":
+            this_target_name = row["Target"]
         if "anno" in row and row["anno"] is not None and str(row["anno"]) != "nan":
-            this_guide_name = row["anno"]
-        if "Anno" in row and row["Anno"] is not None and str(row["Anno"]) != "nan":
-            this_guide_name = row["Anno"]
-        guide_df.loc[idx, "guide_name"] = this_guide_name
+            this_target_name = row["anno"]
+        target_df.loc[idx, "target_name"] = this_target_name
 
         if this_ontarget_name not in ontarget_seqs:
             raise Exception(
@@ -1138,8 +1162,8 @@ def parse_guide_info(guide_file, sort_based_on_mismatch=False):
                 + str(ontarget_seqs.keys())
             )
         this_ontarget_seq = ontarget_seqs[this_ontarget_name]
-        guide_df.loc[idx, "ontarget_sequence"] = this_ontarget_seq
-        guide_df.loc[idx, "ontarget_name"] = this_ontarget_name
+        target_df.loc[idx, "ontarget_sequence"] = this_ontarget_seq
+        target_df.loc[idx, "ontarget_name"] = this_ontarget_name
 
         this_chr_loc_els = row["Locus"].split(":")
         this_chr = this_chr_loc_els[0]
@@ -1147,82 +1171,82 @@ def parse_guide_info(guide_file, sort_based_on_mismatch=False):
             this_pos = int(this_chr_loc_els[1][1:])
         else:
             this_pos = int(this_chr_loc_els[1])
-        guide_df.loc[idx, "guide_chr"] = this_chr
-        guide_df.loc[idx, "guide_pos"] = this_pos
-        guide_df.loc[idx, "guide_seq_no_gaps_with_pam"] = (
+        target_df.loc[idx, "target_chr"] = this_chr
+        target_df.loc[idx, "target_pos"] = this_pos
+        target_df.loc[idx, "target_seq_no_gaps_with_pam"] = (
             row["Sequence"].replace("-", "") + row["PAM"]
         )
-        guide_df.loc[idx, "guide_seq_no_gaps"] = row["Sequence"].replace("-", "")
+        target_df.loc[idx, "target_seq_no_gaps"] = row["Sequence"].replace("-", "")
 
-    return guide_df[
+    return target_df[
             [
-                "guide_id",
-                "guide_name",
+                "target_id",
+                "target_name",
                 "sort_index",
-                "guide_chr",
-                "guide_pos",
-                "guide_seq_no_gaps_with_pam",
-                "guide_seq_no_gaps",
-                "guide_seq_with_gaps",
-                "guide_pam",
+                "target_chr",
+                "target_pos",
+                "target_seq_no_gaps_with_pam",
+                "target_seq_no_gaps",
+                "target_seq_with_gaps",
+                "target_pam",
                 "ontarget_name",
                 "ontarget_sequence",
             ]
         ]
 
 
-def make_guide_region_assignments(
+def make_target_region_assignments(
     merged_region_info_file,
-    guide_file,
+    target_file,
     output_folder,
     sort_based_on_mismatch=False,
-    allow_guide_match_to_other_region_loc=False,
+    allow_target_match_to_other_region_loc=False,
 ):
     """
-    Assign guides to regions based on their sequences and positions
+    Assign guide targets to regions based on their sequences and positions
 
     params:
     - merged_region_info_df: dataframe of merged regions with columns for: chr, start, end, read_count and seq
-    - guide_file: path to the user-provided guide file
+    - target_file: path to the user-provided target file
     - output_folder: path to the output file root
-    - sort_based_on_mismatch: if true, guides are sorted based on mismatch count. If false, guides are presented in the order they are in the file
-    - allow_guide_match_to_other_region_loc: if true, guides can be matched to regions based on sequence even if they are not in the same position. If false, guides can only match to regions containing that guide's chr:loc
+    - sort_based_on_mismatch: if true, targets are sorted based on mismatch count. If false, targets are presented in the order they are in the file
+    - allow_target_match_to_other_region_loc: if true, targets can be matched to regions based on sequence even if they are not in the same position. If false, targets can only match to regions containing that target's chr:loc
 
     returns:
     - path to the CRISPRessoPooledRegions file
-    - guide_df: the guide dataframe
+    - target_df: the target dataframe
     - region_df: the region dataframe
     """
-    # we parse the guide_df here because we'll add more columns to it
-    guide_df = parse_guide_info(guide_file, sort_based_on_mismatch)
+    # we parse the target_df here because we'll add more columns to it
+    target_df = parse_target_info(target_file, sort_based_on_mismatch)
     merged_region_df = pd.read_csv(merged_region_info_file, sep="\t")
     merged_region_df.index = merged_region_df["chr"].astype(str) + "_" + merged_region_df["start"].astype(str) + "_" + merged_region_df["end"].astype(str)
 
-    # first, for each guide, match its sequence to genomic region(s)
-    # the matching will be performed so that each guide is assigned to
-    # 1) If there is one region that corresponds to the guide position it is assigned to that region.
-    # 2) Else if there are multiple regions that correspond to the guide position, it is assigned to the region with the highest read count
-    # 3) Else (the chr:pos is not given or the guide position is in no regions), if the guide sequence is found in one region the guide is assigned to that region
-    # 4) Else (there are multiple regions that contain the guide sequence), it is assigned to the region with the highest read count without a previously-assigned guide.
-    guide_matches = {}  # guide_seq_id -> final assigned region
+    # first, for each target, match its sequence to genomic region(s)
+    # the matching will be performed so that each target is assigned to
+    # 1) If there is one region that corresponds to the target position it is assigned to that region.
+    # 2) Else if there are multiple regions that correspond to the target position, it is assigned to the region with the highest read count
+    # 3) Else (the chr:pos is not given or the target position is in no regions), if the target sequence is found in one region the target is assigned to that region
+    # 4) Else (there are multiple regions that contain the target sequence), it is assigned to the region with the highest read count without a previously-assigned target.
+    target_matches = {}  # target_id -> final assigned region
     region_matches = defaultdict(
         list
-    )  # region -> list of guide_seq_ids that were assigned to it
+    )  # region -> list of target_ids that were assigned to it
 
-    all_guide_matches = defaultdict(
+    all_target_matches = defaultdict(
         list
-    )  # guide_seq_id -> list of regions (all regions with position or sequence match)
-    all_region_matches = defaultdict(list)  # region -> list of guide_seq_ids
+    )  # target_id -> list of regions (all regions with position or sequence match)
+    all_region_matches = defaultdict(list)  # region -> list of target_ids
 
-    for guide_idx, guide_row in guide_df.iterrows():
-        guide_seq_with_pam = guide_row["guide_seq_no_gaps_with_pam"]
-        guide_id = guide_row["guide_id"]
-        guide_name = guide_row["guide_name"]
-        guide_chr = guide_row["guide_chr"]
-        guide_pos = guide_row["guide_pos"]
+    for target_idx, target_row in target_df.iterrows():
+        target_seq_with_pam = target_row["target_seq_no_gaps_with_pam"]
+        target_id = target_row["target_id"]
+        target_name = target_row["target_name"]
+        target_chr = target_row["target_chr"]
+        target_pos = target_row["target_pos"]
 
-        this_guide_seq_matches = []
-        this_guide_region_matches = []
+        this_target_matches = []
+        this_target_region_matches = []
         for region_idx, region_row in merged_region_df.iterrows():
             region_name = region_row.name
             region_chr = region_row["chr"]
@@ -1230,104 +1254,105 @@ def make_guide_region_assignments(
             region_end = region_row["end"]
             region_seq = region_row["seq"]
 
-            # first, check if the region contains the guide sequence
+            # first, check if the region contains the target sequence
             is_seq_match = False
-            if guide_seq_with_pam.upper() in region_seq.upper():
+            if target_seq_with_pam.upper() in region_seq.upper():
                 is_seq_match = True
-            elif reverse_complement(guide_seq_with_pam).upper() in region_seq.upper():
+            elif reverse_complement(target_seq_with_pam).upper() in region_seq.upper():
                 is_seq_match = True
 
             if (
-                not allow_guide_match_to_other_region_loc
-            ):  # don't allow matches based on guide match to region sequence
+                not allow_target_match_to_other_region_loc
+            ):  # don't allow matches based on target match to region sequence
                 is_seq_match = False
 
             if is_seq_match:
-                this_guide_seq_matches.append(region_name)
+                this_target_matches.append(region_name)
 
-            # next, check if the guide position is within the region
+            # next, check if the target position is within the region
             is_pos_match = False
             if (
-                guide_chr == region_chr
-                and guide_pos >= region_start
-                and guide_pos <= region_end
+                target_chr == region_chr
+                and target_pos >= region_start
+                and target_pos <= region_end
             ):
-                this_guide_region_matches.append(region_name)
+                this_target_region_matches.append(region_name)
                 is_pos_match = True
             elif (
-                guide_chr.replace("chr", "") == region_chr.replace("chr", "")
-                and guide_pos >= region_start
-                and guide_pos <= region_end
+                target_chr.replace("chr", "") == region_chr.replace("chr", "")
+                and target_pos >= region_start
+                and target_pos <= region_end
             ):
-                this_guide_region_matches.append(region_name)
+                this_target_region_matches.append(region_name)
                 is_pos_match = True
 
             if is_seq_match or is_pos_match:
-                all_guide_matches[guide_id].append(region_name)
-                all_region_matches[region_name].append(guide_id)
+                all_target_matches[target_id].append(region_name)
+                all_region_matches[region_name].append(target_id)
 
-        # make the final assignment for this guide
-        if len(this_guide_region_matches) == 1:  # if there is one region match, take it
-            guide_matches[guide_id] = this_guide_region_matches[0]
-            region_matches[this_guide_region_matches[0]].append(guide_id)
+        # make the final assignment for this target
+        if len(this_target_region_matches) == 1:  # if there is one region match, take it
+            target_matches[target_id] = this_target_region_matches[0]
+            region_matches[this_target_region_matches[0]].append(target_id)
         elif (
-            len(this_guide_region_matches) > 1
+            len(this_target_region_matches) > 1
         ):  # if there are multiple region matches, take the one with highest number of reads
             best_region_name = None
             best_region_count = 0
-            for region_name in this_guide_region_matches:
+            for region_name in this_target_region_matches:
                 region_count = merged_region_df.loc[region_name, "region_count"]
                 if region_count > best_region_count:
                     best_region_name = region_name
                     best_region_count = region_count
-            guide_matches[guide_id] = best_region_name
-            region_matches[best_region_name].append(guide_id)
+            target_matches[target_id] = best_region_name
+            region_matches[best_region_name].append(target_id)
         elif (
-            len(this_guide_seq_matches) == 1
+            len(this_target_matches) == 1
         ):  # if there is one sequence match, take it
-            guide_matches[guide_id] = this_guide_seq_matches[0]
-            region_matches[this_guide_seq_matches[0]].append(guide_id)
+            target_matches[target_id] = this_target_matches[0]
+            region_matches[this_target_matches[0]].append(target_id)
         elif (
-            len(this_guide_seq_matches) > 1
-        ):  # if there are multiple sequence matches, take the one with highest number of reads without a guide match
-            best_region_name = this_guide_seq_matches[0]
+            len(this_target_matches) > 1
+        ):  # if there are multiple sequence matches, take the one with highest number of reads without a target match
+            best_region_name = this_target_matches[0]
             best_region_count = 0
-            for region_name in this_guide_seq_matches:
+            for region_name in this_target_matches:
                 region_count = merged_region_df.loc[region_name, "region_count"]
                 if (
                     region_count > best_region_count
                     and len(region_matches[region_name]) == 0
                 ):
-                    best_region = region_name
+                    best_region_name = region_name
                     best_region_count = region_count
-            guide_matches[guide_id] = best_region_name
-            region_matches[best_region_name].append(guide_id)
+            target_matches[target_id] = best_region_name
+            region_matches[best_region_name].append(target_id)
 
     # next, finalize matches and write them to file
-    out_file = output_folder + "guide_region_matches.txt"
-    guide_match_count = 0  # how many guides had a region match
-    guide_nomatch_count = 0  # how many guides did not have a region match
+    out_file = output_folder + "target_region_matches.txt"
+    target_match_count = 0  # how many targets had a region match
+    target_nomatch_count = 0  # how many targets did not have a region match
 
-    guide_df["matched_region_count"] = 0
-    guide_df["matched_region"] = "NA"
+    target_df["matched_region_count"] = 0
+    target_df["matched_region"] = "NA"
+    target_df["matched_region_id"] = "NA"
     with open(out_file, "w") as fout:
         fout.write(
-            "guide_id\tguide_name\tguide_seq\tguide_seq_with_pam\tguide_chr\tguide_pos\tontarget_name\tontarget_seq\tmatched_region_count\tmatched_regions\tregion_chr\tregion_start\tregion_end\tregion_read_count\tregion_seq\n"
+            "target_id\ttarget_name\ttarget_seq\ttarget_seq_with_pam\ttarget_chr\ttarget_pos\tontarget_name\tontarget_seq\tmatched_region_count\tmatched_regions\tregion_chr\tregion_start\tregion_end\tregion_read_count\tregion_seq\n"
         )
-        for guide_idx, guide_row in guide_df.iterrows():
-            guide_seq_id = guide_row["guide_id"]
-            guide_seq = guide_row["guide_seq_no_gaps"]
-            guide_seq_with_pam = guide_row["guide_seq_no_gaps_with_pam"]
-            guide_seq_name = guide_row["guide_name"]
-            guide_chr = guide_row["guide_chr"]
-            guide_pos = guide_row["guide_pos"]
-            guide_ontarget_name = guide_row["ontarget_name"]
-            guide_ontarget_seq = guide_row["ontarget_sequence"]
-            if guide_seq_id in guide_matches:
-                guide_match_count += 1
-                matched_region_count = len(all_guide_matches[guide_seq_id])
-                matched_regions = ", ".join(all_guide_matches[guide_seq_id])
-                region_name = guide_matches[guide_seq_id]
+        for target_idx, target_row in target_df.iterrows():
+            target_id = target_row["target_id"]
+            target_seq = target_row["target_seq_no_gaps"]
+            target_seq_with_pam = target_row["target_seq_no_gaps_with_pam"]
+            target_name = target_row["target_name"]
+            target_chr = target_row["target_chr"]
+            target_pos = target_row["target_pos"]
+            target_ontarget_name = target_row["ontarget_name"]
+            target_ontarget_seq = target_row["ontarget_sequence"]
+            if target_id in target_matches:
+                target_match_count += 1
+                matched_region_count = len(all_target_matches[target_id])
+                matched_regions = ", ".join(all_target_matches[target_id])
+                region_name = target_matches[target_id]
                 region_chr = merged_region_df.loc[region_name, "chr"]
                 region_start = merged_region_df.loc[region_name, "start"]
                 region_end = merged_region_df.loc[region_name, "end"]
@@ -1338,14 +1363,14 @@ def make_guide_region_assignments(
                         [
                             str(x)
                             for x in [
-                                guide_seq_id,
-                                guide_seq_name,
-                                guide_seq,
-                                guide_seq_with_pam,
-                                guide_chr,
-                                guide_pos,
-                                guide_ontarget_name,
-                                guide_ontarget_seq,
+                                target_id,
+                                target_name,
+                                target_seq,
+                                target_seq_with_pam,
+                                target_chr,
+                                target_pos,
+                                target_ontarget_name,
+                                target_ontarget_seq,
                                 matched_region_count,
                                 matched_regions,
                                 region_chr,
@@ -1358,26 +1383,26 @@ def make_guide_region_assignments(
                     )
                     + "\n"
                 )
-                guide_df.loc[guide_idx, "matched_region_count"] = matched_region_count
-                guide_df.loc[guide_idx, "matched_region"] = region_name
-            # if guide wasn't selected as the final match for a region, it will be in all_guide_matches
-            elif guide_seq_id in all_guide_matches:
-                guide_nomatch_count += 1
-                matched_region_count = len(all_guide_matches[guide_seq_id])
-                matched_regions = ", ".join(all_guide_matches[guide_seq_id])
+                target_df.loc[target_idx, "matched_region_count"] = matched_region_count
+                target_df.loc[target_idx, "matched_region"] = region_name
+            # if target wasn't selected as the final match for a region, it will be in all_target_matches
+            elif target_id in all_target_matches:
+                target_nomatch_count += 1
+                matched_region_count = len(all_target_matches[target_id])
+                matched_regions = ", ".join(all_target_matches[target_id])
                 fout.write(
                     "\t".join(
                         [
                             str(x)
                             for x in [
-                                guide_seq_id,
-                                guide_seq_name,
-                                guide_seq,
-                                guide_seq_with_pam,
-                                guide_chr,
-                                guide_pos,
-                                guide_ontarget_name,
-                                guide_ontarget_seq,
+                                target_id,
+                                target_name,
+                                target_seq,
+                                target_seq_with_pam,
+                                target_chr,
+                                target_pos,
+                                target_ontarget_name,
+                                target_ontarget_seq,
                                 0,
                                 matched_regions,
                                 "NA",
@@ -1391,20 +1416,20 @@ def make_guide_region_assignments(
                     + "\n"
                 )
             else:
-                guide_nomatch_count += 1
+                target_nomatch_count += 1
                 fout.write(
                     "\t".join(
                         [
                             str(x)
                             for x in [
-                                guide_seq_id,
-                                guide_seq_name,
-                                guide_seq,
-                                guide_seq_with_pam,
-                                guide_chr,
-                                guide_pos,
-                                guide_ontarget_name,
-                                guide_ontarget_seq,
+                                target_id,
+                                target_name,
+                                target_seq,
+                                target_seq_with_pam,
+                                target_chr,
+                                target_pos,
+                                target_ontarget_name,
+                                target_ontarget_seq,
                                 0,
                                 "NA",
                                 "NA",
@@ -1418,15 +1443,7 @@ def make_guide_region_assignments(
                     + "\n"
                 )
 
-    info(
-        "Matched "
-        + str(guide_match_count)
-        + "/"
-        + str(len(guide_df))
-        + " guides to regions from read alignments. Wrote matches to "
-        + out_file,
-        {'percent_complete': 25}
-    )
+    info("Matched " + str(target_match_count) + "/" + str(len(target_df)) + " targets to regions from read alignments. Wrote matches to " + out_file, {'percent_complete': 25})
 
     # next write information about all regions plus the file for crispresso input
     crispresso_output_file = output_folder + "CRISPRessoPooledRegions.txt"
@@ -1434,11 +1451,9 @@ def make_guide_region_assignments(
     region_match_count = 0
     region_nomatch_count = 0
     printed_crispresso_count = 0
-    with open(all_region_output_file, "w") as rout, open(
-        crispresso_output_file, "w"
-    ) as cout:
+    with open(all_region_output_file, "w") as rout, open(crispresso_output_file, "w") as cout:
         rout.write(
-            "region_id\tchr\tstart\tend\tread_count\tseq\tguide_match_count\tguide_matches\tguide_id\tguide_name\tguide_seq\tguide_chr\tguide_pos\n"
+            "region_id\tchr\tstart\tend\tread_count\tseq\ttarget_match_count\ttarget_matches\ttarget_id\ttarget_name\ttarget_seq\ttarget_chr\ttarget_pos\n"
         )
         for region_idx, region_row in merged_region_df.iterrows():
             region_chr = region_row["chr"]
@@ -1448,26 +1463,27 @@ def make_guide_region_assignments(
             region_count = region_row["read_count"]
             region_name = region_row.name
 
-            guide_id = "NA"
-            guide_name = "NA"
-            guide_seq = "NA"
-            guide_chr = "NA"
-            guide_pos = "NA"
-            this_guide_match_count = len(all_region_matches[region_name])
-            if this_guide_match_count > 0:
-                this_guide_matches = ", ".join(all_region_matches[region_name])
+            target_id = "NA"
+            target_name = "NA"
+            target_seq = "NA"
+            target_chr = "NA"
+            target_pos = "NA"
+            this_target_match_count = len(all_region_matches[region_name])
+            if this_target_match_count > 0:
+                this_target_matches = ", ".join(all_region_matches[region_name])
             else:
-                this_guide_matches = "NA"
+                this_target_matches = "NA"
             if region_name in all_region_matches:
                 if region_name in region_matches:
                     region_match_count += 1
-                    guide_id = region_matches[region_name][0]  # the assigned guides that matched to this region
-                    guide_seq = guide_df.loc[guide_df["guide_id"] == guide_id, "guide_seq_no_gaps"].values[0]  # no pam (for CRISPResso)
-                    guide_name = guide_df.loc[guide_df["guide_id"] == guide_id, "guide_name"].values[0]
-                    guide_chr = guide_df.loc[guide_df["guide_id"] == guide_id, "guide_chr"].values[0]
-                    guide_pos = guide_df.loc[guide_df["guide_id"] == guide_id, "guide_pos"].values[0]
-                    region_name = region_name + "_" + guide_name
-                    cout.write("\t".join([region_name, region_seq, guide_seq]) + "\n")
+                    target_id = region_matches[region_name][0]  # the assigned targets that matched to this region
+                    target_seq = target_df.loc[target_df["target_id"] == target_id, "target_seq_no_gaps"].values[0]  # no pam (for CRISPResso)
+                    target_name = target_df.loc[target_df["target_id"] == target_id, "target_name"].values[0]
+                    target_chr = target_df.loc[target_df["target_id"] == target_id, "target_chr"].values[0]
+                    target_pos = target_df.loc[target_df["target_id"] == target_id, "target_pos"].values[0]
+                    region_name = region_name + "_" + target_name
+                    target_df.loc[target_df["target_id"] == target_id, "matched_region_id"] = region_name
+                    cout.write("\t".join([region_name, region_seq, target_seq]) + "\n")
                     printed_crispresso_count += 1
                 else:
                     region_nomatch_count += 1
@@ -1477,29 +1493,22 @@ def make_guide_region_assignments(
                 "\t".join(
                     str(x)
                     for x in [ region_name, region_chr, region_start, region_end, region_count, region_seq, 
-                              this_guide_match_count, this_guide_matches, guide_id, guide_name, 
-                              guide_seq, guide_chr, guide_pos, ]
+                              this_target_match_count, this_target_matches, target_id, target_name, 
+                              target_seq, target_chr, target_pos, ]
                 )
                 + "\n"
             )
 
-    info(
-        "Matched "
-        + str(region_match_count)
-        + "/"
-        + str(region_match_count + region_nomatch_count)
-        + " frequently-aligned locations to guides. Wrote region info to "
-        + all_region_output_file,
-        {'percent_complete': 30}
-    )
+    info("Matched " + str(region_match_count) + "/" + str(region_match_count + region_nomatch_count) + " frequently-aligned locations to targets. " + \
+        "Wrote region info to " + all_region_output_file, {'percent_complete': 30})
 
     if printed_crispresso_count == 0:
         raise Exception(
-            "No regions matched to guides. Check the guide file and the regions file for consistency.\n" + \
-            "\tGuide file: " + guide_file + "\n\tRegions file: " + merged_region_info_file
+            "No regions matched to targets. Check the target file and the regions file for consistency.\n" + \
+            "\tTarget file: " + target_file + "\n\tRegions file: " + merged_region_info_file
         )
     region_df = pd.read_csv(all_region_output_file, sep="\t")
-    return crispresso_output_file, guide_df, region_df
+    return crispresso_output_file, target_df, region_df
 
 def run_crispresso_with_assigned_regions(
     experiment_name,
@@ -1538,7 +1547,7 @@ def run_crispresso_with_assigned_regions(
     returns:
     - the output folder for this CRISPResso run
     """
-    # Run CRISPResso again on the subset, this time including guide sequences
+    # Run CRISPResso again on the subset, this time including target sequences
     r2_string = ""
     if fastq_r2 is not None:
         r2_string = " -r2 " + fastq_r2
@@ -1605,38 +1614,40 @@ def run_crispresso_with_assigned_regions(
     return CRISPResso_output_folder
 
 
-def analyze_run(output_name, crispresso_folder, guide_df, region_df):
+def analyze_run(output_name, crispresso_folder, target_df, region_df):
     """
     Analyzes a CRISPResso Pooled run to get the base editing and indel rates for each site
 
     params:
     - output_name: the name of the output file
     - crispresso_folder: the folder containing the CRISPResso output
-    - guide_df: the guide dataframe
-    - region_df: the region dataframe
+    - target_df: the target dataframe with columns target_id, target_name, matched_region, matched_region_id, etc.
+    - region_df: the region dataframe with columns region_id, target_id, etc.
 
     returns:
     - summary_output_file: a file with the summary of the run
-    - guide_summary_df: a pandas data frame with results for each guide
+    - target_summary_df: a pandas data frame with results for each target
     """
+    target_summary_file = output_name + ".complete_target_summary.txt"
 
-    guide_summary_file = output_name + ".complete_guide_summary.txt"
-    if crispresso_folder is None:
-        guide_data = []
-        with open(guide_summary_file, "w") as fout:
+    # if no output folder is provided, add row with NAs for each target
+    if crispresso_folder is None or not os.path.exists(crispresso_folder):
+        target_data = []
+        with open(target_summary_file, "w") as fout:
             fout.write(
-                "guide_id\tguide_label\tpooled_result_name\thighest_a_g_pct\thighest_c_t_pct\thighest_indel_pct\ttot_reads\n"
+                "target_id\ttarget_label\tpooled_result_name\thighest_a_g_pct\thighest_c_t_pct\thighest_indel_pct\ttot_reads\n"
             )
-        for idx, row in guide_df.iterrows():
-            guide_id = row["guide_id"]
-            guide_name = row["guide_name"]
-            fout.write(guide_id + "\t" + guide_name + "\tNA\tNA\tNA\tNA\n")
-            guide_data.append([guide_id, guide_name, np.nan, np.nan, np.nan, np.nan])
-        guide_data_df = pd.DataFrame(
-            guide_data,
+        for idx, row in target_df.iterrows():
+            target_id = row["target_id"]
+            target_name = row["target_name"]
+            fout.write(target_id + "\t" + target_name + "\tNA\tNA\tNA\tNA\n")
+            target_data.append([target_id, target_name, np.nan, np.nan, np.nan, np.nan])
+
+        target_data_df = pd.DataFrame(
+            target_data,
             columns=[
-                "guide_id",
-                "guide_label",
+                "target_id",
+                "target_label",
                 "pooled_result_name",
                 "highest_a_g_pct",
                 "highest_c_t_pct",
@@ -1644,7 +1655,7 @@ def analyze_run(output_name, crispresso_folder, guide_df, region_df):
                 "tot_reads",
             ],
         )
-        return guide_summary_file, guide_data_df
+        return target_summary_file, target_data_df
 
     pooled_info = CRISPRessoShared.load_crispresso_info(
         crispresso_info_file_path=crispresso_folder + "/CRISPResso2Pooled_info.json"
@@ -1659,197 +1670,132 @@ def analyze_run(output_name, crispresso_folder, guide_df, region_df):
     output_dir = output_name + "_plots"
     os.makedirs(output_dir, exist_ok=True)
 
-    guide_results = {}
-    output_summary_file = output_name + ".complete_summary.txt"
-    with open(output_summary_file, "w") as fout:
-        fout.write(
-            "\t".join(
-                [
-                    "folder_name",
-                    "highest_a_g_pct",
-                    "highest_c_t_pct",
-                    "highest_indel_pct",
-                    "tot_reads",
-                    "guide_id",
-                    "guide_name",
-                    "guide_chr",
-                    "guide_pos",
-                    "guide_used",
-                    "guide_seq_with_gaps",
-                    "guide_pam",
-                ]
-            )
-            + "\n"
+    #associate pooled results with targets
+    target_pooled_results_lookup = {}
+    for pooled_result_name in pooled_results.keys():
+        folder_name = pooled_results[pooled_result_name]
+        run_info = CRISPRessoShared.load_crispresso_info(
+            crispresso_info_file_path=crispresso_folder
+            + "/"
+            + folder_name
+            + "/CRISPResso2_info.json"
         )
-        for pooled_result_name in pooled_results.keys():
-            folder_name = pooled_results[pooled_result_name]
-            run_info = CRISPRessoShared.load_crispresso_info(
-                crispresso_info_file_path=crispresso_folder
-                + "/"
-                + folder_name
-                + "/CRISPResso2_info.json"
-            )
-            guide_used = run_info["results"]["refs"]["Reference"]["sgRNA_sequences"][0]
+        region_info = region_df.loc[region_df["region_id"] == pooled_result_name]
+        target_id = region_info["target_id"].values[0]
 
-            region_info = region_df.loc[region_df["region_id"] == pooled_result_name]
-            guide_id = region_info["guide_id"].values[0]
-            guide_info = guide_df.loc[guide_df["guide_id"] == guide_id]
-            guide_name = guide_info["guide_name"].values[0]
+        target_pooled_results_lookup[target_id] = pooled_result_name
 
-            include_idxs = run_info["results"]["refs"]["Reference"]["include_idxs"]
-            nuc_freq_table_file = (
-                crispresso_folder
-                + "/"
-                + folder_name
-                + "/Nucleotide_frequency_table.txt"
-            )
-            mod_freq_table_file = (
-                crispresso_folder
-                + "/"
-                + folder_name
-                + "/Modification_count_vectors.txt"
-            )
-            nuc_freq_table = pd.read_csv(nuc_freq_table_file, sep="\t", index_col=0)
-            mod_freq_table = pd.read_csv(mod_freq_table_file, sep="\t", index_col=0)
-            highest_a_g_pct = 0
-            highest_c_t_pct = 0
-            highest_indel_pct = 0
-            this_tot = 0
-            for this_idx in include_idxs:
-                #        for i in range(8, 24): # starts and ends 3bp from the end of the guide (skips subs in the 2bp on the very ends)
-                #                this_idx = include_idxs[i]
-                nuc_vals = nuc_freq_table.iloc[:, this_idx]
-                mod_vals = mod_freq_table.iloc[:, this_idx]
-
-                this_nuc = nuc_vals.name
-                a_count = nuc_vals["A"]
-                c_count = nuc_vals["C"]
-                g_count = nuc_vals["G"]
-                t_count = nuc_vals["T"]
-                del_count = mod_vals["Deletions"]
-                ins_count = mod_vals["Insertions"]
-                tot_count = mod_vals["Total"]
-                this_tot = tot_count
-
-                if this_nuc[0] == "A":
-                    a_g_pct = g_count / tot_count
-                    if a_g_pct > highest_a_g_pct:
-                        highest_a_g_pct = a_g_pct
-                elif this_nuc[0] == "C":
-                    c_t_pct = t_count / tot_count
-                    if c_t_pct > highest_c_t_pct:
-                        highest_c_t_pct = c_t_pct
-                elif this_nuc[0] == "G":
-                    c_t_pct = a_count / tot_count
-                    if c_t_pct > highest_c_t_pct:
-                        highest_c_t_pct = c_t_pct
-                elif this_nuc[0] == "T":
-                    a_g_pct = c_count / tot_count
-                    if a_g_pct > highest_a_g_pct:
-                        highest_a_g_pct = a_g_pct
-                if (del_count + ins_count) / tot_count > highest_indel_pct:
-                    highest_indel_pct = (del_count + ins_count) / tot_count
-            highest_a_g_pct *= 100
-            highest_c_t_pct *= 100
-            highest_indel_pct *= 100
-            fout.write(
-                "\t".join(
-                    [
-                        str(x)
-                        for x in [
-                            folder_name,
-                            highest_a_g_pct,
-                            highest_c_t_pct,
-                            highest_indel_pct,
-                            this_tot,
-                            guide_id,
-                            guide_info["guide_name"].values[0],
-                            guide_info["guide_chr"].values[0],
-                            guide_info["guide_pos"].values[0],
-                            guide_used,
-                            guide_info["guide_seq_with_gaps"].values[0],
-                            guide_info["guide_pam"].values[0],
-                        ]
-                    ]
-                )
-                + "\n"
-            )
-            guide_results[guide_id] = (
-                pooled_result_name,
-                highest_a_g_pct,
-                highest_c_t_pct,
-                highest_indel_pct,
-                this_tot,
-            )
-
-            plot2b_file = (
-                crispresso_folder
-                + "/"
-                + folder_name
-                + "/"
-                + run_info["results"]["refs"]["Reference"]["plot_2b_roots"][0]
-                + ".pdf"
-            )
-            if not os.path.isfile(plot2b_file):
-                warn("WARNING: missing plot2b file for", pooled_result_name)
-                continue
-            destination_name = guide_name + "." + pooled_result_name + ".plot2b.pdf"
-            os.popen("cp " + plot2b_file + " " + output_dir + "/" + destination_name)
-
-    guide_data = []
-    with open(guide_summary_file, "w") as fout:
+    #iterate through targets in order and aggregate results
+    target_data = []
+    with open(target_summary_file, "w") as fout:
         fout.write(
-            "guide_id\tguide_label\tpooled_result_name\thighest_a_g_pct\thighest_c_t_pct\thighest_indel_pct\ttot_reads\n"
+            "target_id\ttarget_label\tpooled_result_name\thighest_a_g_pct\thighest_c_t_pct\thighest_indel_pct\ttot_reads\n"
         )
-        for idx, row in guide_df.iterrows():
-            guide_id = row["guide_id"]
-            guide_name = row["guide_name"]
-            if guide_id not in guide_results:
-                fout.write(guide_id + "\t" + guide_name + "\tNA\tNA\tNA\tNA\n")
-                guide_data.append(
-                    [guide_id, guide_name, np.nan, np.nan, np.nan, np.nan]
+        for idx, row in target_df.iterrows():
+            target_id = row["target_id"]
+            target_name = row["target_name"]
+            if target_id not in target_pooled_results_lookup:
+                fout.write(target_id + "\t" + target_name + "\tNA\tNA\tNA\tNA\n")
+                target_data.append(
+                    [target_id, target_name, np.nan, np.nan, np.nan, np.nan]
                 )
             else:
-                (
+                pooled_result_name = target_pooled_results_lookup[target_id]
+                folder_name = pooled_results[pooled_result_name]
+
+                run_info = CRISPRessoShared.load_crispresso_info(
+                    crispresso_info_file_path=crispresso_folder
+                    + "/"
+                    + folder_name
+                    + "/CRISPResso2_info.json"
+                )
+                region_info = region_df.loc[region_df["region_id"] == pooled_result_name]
+
+                target_info = target_df.loc[target_df["target_id"] == target_id]
+                target_name = target_info["target_name"].values[0]
+
+                include_idxs = run_info["results"]["refs"]["Reference"]["include_idxs"]
+                nuc_freq_table_file = (crispresso_folder + "/" + folder_name + "/Nucleotide_frequency_table.txt")
+                mod_freq_table_file = (crispresso_folder + "/" + folder_name + "/Modification_count_vectors.txt")
+                nuc_freq_table = pd.read_csv(nuc_freq_table_file, sep="\t", index_col=0)
+                mod_freq_table = pd.read_csv(mod_freq_table_file, sep="\t", index_col=0)
+                highest_a_g_pct = 0
+                has_valid_a_g = False
+                highest_c_t_pct = 0
+                has_valid_c_t = False
+                highest_indel_pct = 0
+                tot_count = 0
+                for this_idx in include_idxs:
+                    nuc_vals = nuc_freq_table.iloc[:, this_idx]
+                    mod_vals = mod_freq_table.iloc[:, this_idx]
+
+                    this_nuc = nuc_vals.name # e.g. C.15 -- the 15 comes from pandas making column names unique
+                    a_count = nuc_vals["A"]
+                    c_count = nuc_vals["C"]
+                    g_count = nuc_vals["G"]
+                    t_count = nuc_vals["T"]
+                    del_count = mod_vals["Deletions"]
+                    ins_count = mod_vals["Insertions"]
+                    tot_count = mod_vals["Total"]
+
+                    if this_nuc[0].upper() == "A":
+                        has_valid_a_g = True
+                        a_g_pct = g_count / tot_count
+                        if a_g_pct > highest_a_g_pct:
+                            highest_a_g_pct = a_g_pct
+                    elif this_nuc[0].upper() == "C":
+                        has_valid_c_t = True
+                        c_t_pct = t_count / tot_count
+                        if c_t_pct > highest_c_t_pct:
+                            highest_c_t_pct = c_t_pct
+                    elif this_nuc[0].upper() == "G":
+                        has_valid_c_t = True
+                        c_t_pct = a_count / tot_count
+                        if c_t_pct > highest_c_t_pct:
+                            highest_c_t_pct = c_t_pct
+                    elif this_nuc[0].upper() == "T":
+                        has_valid_a_g = True
+                        a_g_pct = c_count / tot_count
+                        if a_g_pct > highest_a_g_pct:
+                            highest_a_g_pct = a_g_pct
+                    if (del_count + ins_count) / tot_count > highest_indel_pct:
+                        highest_indel_pct = (del_count + ins_count) / tot_count
+
+                highest_a_g_pct *= 100
+                highest_c_t_pct *= 100
+                highest_indel_pct *= 100
+
+                if not has_valid_a_g:
+                    highest_a_g_pct = np.nan
+                if not has_valid_c_t:
+                    highest_c_t_pct = np.nan
+
+                data_to_write = [
+                    target_id,
+                    target_name,
                     pooled_result_name,
                     highest_a_g_pct,
                     highest_c_t_pct,
                     highest_indel_pct,
-                    tot_reads,
-                ) = guide_results[guide_id]
-                fout.write(
-                    guide_id
-                    + "\t"
-                    + guide_name
-                    + "\t"
-                    + pooled_result_name
-                    + "\t"
-                    + str(highest_a_g_pct)
-                    + "\t"
-                    + str(highest_c_t_pct)
-                    + "\t"
-                    + str(highest_indel_pct)
-                    + "\t"
-                    + str(tot_reads)
-                    + "\n"
-                )
-                guide_data.append(
-                    [
-                        guide_id,
-                        guide_name,
-                        pooled_result_name,
-                        highest_a_g_pct,
-                        highest_c_t_pct,
-                        highest_indel_pct,
-                        tot_reads,
-                    ]
-                )
+                    tot_count,
+                ]
+                fout.write("\t".join(str(x) for x in data_to_write) + "\n")
+                target_data.append(data_to_write)
+
+            #copy over CRISPResso plot 2b for this target
+            plot2b_file = (crispresso_folder + "/" + folder_name + "/" + run_info["results"]["refs"]["Reference"]["plot_2b_roots"][0] + ".pdf")
+            if not os.path.isfile(plot2b_file):
+                warn("WARNING: missing plot2b file for", pooled_result_name)
+                continue
+            destination_name = target_name + "." + pooled_result_name + ".plot2b.pdf"
+            os.popen("cp " + plot2b_file + " " + output_dir + "/" + destination_name)
+
     plot_heatmap(output_name)
-    guide_data_df = pd.DataFrame(
-        guide_data,
+    target_data_df = pd.DataFrame(
+        target_data,
         columns=[
-            "guide_id",
-            "guide_label",
+            "target_id",
+            "target_label",
             "pooled_result_name",
             "highest_a_g_pct",
             "highest_c_t_pct",
@@ -1857,35 +1803,35 @@ def analyze_run(output_name, crispresso_folder, guide_df, region_df):
             "tot_reads",
         ],
     )
-    return guide_summary_file, guide_data_df
+    return target_summary_file, target_data_df
 
 
-def view_complete_guide_summary(output_name):
+def view_complete_target_summary(output_name):
     """
-    View the complete_guide_summary.txt file for debugging
+    View the complete_target_summary.txt file for debugging
 
     params:
     - output_name: the name of the output folder
 
     """
-    d = pd.read_csv(output_name + ".complete_guide_summary.txt", sep="\t")
+    d = pd.read_csv(output_name + ".complete_target_summary.txt", sep="\t")
     d.dropna(inplace=True)
-    d.index = d["guide_id"]
+    d.index = d["target_id"]
     print(d)
 
 
 def plot_heatmap(output_name):
     """
-    Plot a heatmap of the highest_a_g_pct, highest_c_t_pct, and highest_indel_pct for each guide
-    Data is read from output_name + ".complete_guide_summary.txt"
+    Plot a heatmap of the highest_a_g_pct, highest_c_t_pct, and highest_indel_pct for each target
+    Data is read from output_name + ".complete_target_summary.txt"
     Plot is written to output_name + ".heatmap.pdf"
 
     params:
     - output_name: the name of the output folder
     """
-    d = pd.read_csv(output_name + ".complete_guide_summary.txt", sep="\t")
+    d = pd.read_csv(output_name + ".complete_target_summary.txt", sep="\t")
     d.dropna(inplace=True)
-    d.set_index("guide_id", inplace=True)
+    d.set_index("target_id", inplace=True)
     fig = plt.figure(figsize=(12, 12), dpi=100, facecolor="w", edgecolor="k")
     sns.heatmap(
         d[["highest_a_g_pct", "highest_c_t_pct", "highest_indel_pct"]].astype(float),
@@ -1897,20 +1843,20 @@ def plot_heatmap(output_name):
     plt.close(fig)
 
 
-def plot_heatmap_sub(output_name, guide_name):
+def plot_heatmap_sub(output_name, target_name):
     """
-    Plot a heatmap of the highest_a_g_pct, highest_c_t_pct, and highest_indel_pct for a specific guide
-    Data is read from output_name + ".complete_guide_summary.txt"
+    Plot a heatmap of the highest_a_g_pct, highest_c_t_pct, and highest_indel_pct for a specific target
+    Data is read from output_name + ".complete_target_summary.txt"
     Plot is written to output_name + ".heatmap.pdf"
 
     params:
     - output_name: the name of the output folder
-    - guide_name: the name of the guide to plot
+    - target_name: the name of the target to plot
     """
-    d = pd.read_csv(output_name + ".complete_guide_summary.txt", sep="\t")
+    d = pd.read_csv(output_name + ".complete_target_summary.txt", sep="\t")
     d.dropna(inplace=True)
-    d.set_index("guide_id", inplace=True)
-    dsub = d[d["ontarget_name"] == guide_name]
+    d.set_index("target_id", inplace=True)
+    dsub = d[d["ontarget_name"] == target_name]
     fig = plt.figure(figsize=(6, 6), dpi=100, facecolor="w", edgecolor="k")
     sns.heatmap(
         dsub[["highest_a_g_pct", "highest_c_t_pct", "highest_indel_pct"]].astype(float),
@@ -1921,16 +1867,16 @@ def plot_heatmap_sub(output_name, guide_name):
     plt.close(fig)
 
 
-def create_guide_df_for_plotting(guide_df):
+def create_target_df_for_plotting(target_df):
     """
-    Create a dataframe for plotting guides in a heatmap
+    Create a dataframe for plotting target in a heatmap
 
     params:
-    - guide_df: the guide dataframe
-        includes columns: guide_id, guide_name, guide_seq_no_gaps, guide_pam, ontarget_name, ontarget_sequence
+    - target_df: the target dataframe
+        includes columns: target_id, target_name, target_seq_no_gaps, target_pam, ontarget_name, ontarget_sequence
 
     returns:
-    - a dataframe with guide sequences for plotting
+    - a dataframe with target sequences for plotting
         adds column: padded_seqs_for_plot (list of characters for each box in the plot heatmap)
     """
     aln_matrix = CRISPResso2Align.make_matrix()
@@ -1939,22 +1885,21 @@ def create_guide_df_for_plotting(guide_df):
     aln_ontarget_seqs = []
     aln_offtarget_seqs = []
 
-    last_guide_name = None # guide name - not the on/offtarget name
-    last_guide_seq = None
-    for idx, row in guide_df.iterrows():
-        if row["ontarget_name"] != last_guide_name: # this is the first time we see this guide sequence - plot the full sequence
-            last_guide_name = row["ontarget_name"]
-            last_guide_seq = row["guide_seq_no_gaps"] # may change this to row['ontarget_sequence'] if everything should be plotted with regard to the on-target sequence. As is, everything is plotted with regard to the vertically first time we see the guide sequence
-            this_seq = row["guide_seq_no_gaps"]
-            this_id = row["guide_id"]
-            seqs_for_plot.append((list(this_seq), row["guide_pam"]))
+    last_target_name = None # target name - not the on/offtarget name
+    last_target_seq = None
+    for idx, row in target_df.iterrows():
+        if row["ontarget_name"] != last_target_name: # this is the first time we see this target sequence - plot the full sequence
+            last_target_name = row["ontarget_name"]
+            last_target_seq = row["target_seq_no_gaps"] # may change this to row['ontarget_sequence'] if everything should be plotted with regard to the on-target sequence. As is, everything is plotted with regard to the vertically first time we see the target sequence
+            this_seq = row["target_seq_no_gaps"]
+            seqs_for_plot.append((list(this_seq), row["target_pam"]))
             aln_ontarget_seqs.append(this_seq)
             aln_offtarget_seqs.append(this_seq)
-        else: #otherwise, only plot only '.' or differences compared to the first time we see this guide sequence
-            ref_incentive = np.zeros(len(last_guide_seq) + 1, dtype=int)
+        else: #otherwise, only plot only '.' or differences compared to the first time we see this target sequence
+            ref_incentive = np.zeros(len(last_target_seq) + 1, dtype=int)
             off_target_aln, on_target_aln, aln_score = CRISPResso2Align.global_align(
-                row["guide_seq_no_gaps"].upper(),
-                last_guide_seq.upper(),
+                row["target_seq_no_gaps"].upper(),
+                last_target_seq.upper(),
                 matrix=aln_matrix,
                 gap_incentive=ref_incentive,
                 gap_open=-20,
@@ -1984,7 +1929,7 @@ def create_guide_df_for_plotting(guide_df):
                         this_chars_for_plot.append(".")
                 elif (
                     on_target_char == "-"
-                ):  # if gap in ontarget (insertion in this guide/offtarget), add this base to the previous base
+                ):  # if gap in ontarget (insertion in this target/offtarget), add this base to the previous base
                     if idx == 0:
                         first_base_is_del_in_ontarget = True
                         this_chars_for_plot.append(off_target_char)
@@ -2018,44 +1963,44 @@ def create_guide_df_for_plotting(guide_df):
                     + str(len(on_target_aln.replace("-", "")) + ")")
                 )
 
-            seqs_for_plot.append((this_chars_for_plot, row["guide_pam"]))
+            seqs_for_plot.append((this_chars_for_plot, row["target_pam"]))
             aln_ontarget_seqs.append(on_target_aln)
             aln_offtarget_seqs.append(off_target_aln)
 
-    max_guide_len = 0
+    max_target_seq_len = 0
     max_pam_len = 0
-    for guide_chars, pam_seq in seqs_for_plot:
-        if len(guide_chars) > max_guide_len:
-            max_guide_len = len(guide_chars)
+    for target_seq_chars, pam_seq in seqs_for_plot:
+        if len(target_seq_chars) > max_target_seq_len:
+            max_target_seq_len = len(target_seq_chars)
         if len(pam_seq) > max_pam_len:
             max_pam_len = len(pam_seq)
 
     # now, pad the alignments with spaces in case they are different lengths
     padded_seqs_for_plot = []
-    for guide_chars, pam_seq in seqs_for_plot:
-        padded_guide_chars = [" "] * (max_guide_len - len(guide_chars)) + guide_chars
+    for target_seq_chars, pam_seq in seqs_for_plot:
+        padded_target_chars = [" "] * (max_target_seq_len - len(target_seq_chars)) + target_seq_chars
         padded_pam_seq = pam_seq + " " * (max_pam_len - len(pam_seq))
-        padded_seqs_for_plot.append(padded_guide_chars + list(padded_pam_seq))
+        padded_seqs_for_plot.append(padded_target_chars + list(padded_pam_seq))
 
-    guide_df["padded_seqs_for_plot"] = padded_seqs_for_plot
+    target_df["padded_seqs_for_plot"] = padded_seqs_for_plot
     # these are for debugging - can be displayed as a table
-    # guide_df['aln_ontarget_seqs'] = aln_ontarget_seqs
-    # guide_df['aln_offtarget_seqs'] = aln_offtarget_seqs
+    # target_df['aln_ontarget_seqs'] = aln_ontarget_seqs
+    # target_df['aln_offtarget_seqs'] = aln_offtarget_seqs
 
-    df_guides = pd.DataFrame(
-        guide_df["padded_seqs_for_plot"]
+    df_targets = pd.DataFrame(
+        target_df["padded_seqs_for_plot"]
         .apply(lambda seq: [char for char in seq])
         .tolist()
     )
-    df_guides.index = guide_df["guide_id"]
+    df_targets.index = target_df["target_id"]
 
-    return df_guides
+    return df_targets
 
 
 def create_plots(
     data_df,
     sample_df,
-    guide_plot_df,
+    target_plot_df,
     output_folder=None,
     file_prefix="CRISPRessoSea",
     crispresso2_info=None,
@@ -2072,22 +2017,23 @@ def create_plots(
     heatmap_min_value=None,
     plot_group_order=None,
     dot_plot_ylims=[None, None],
+    sig_method_parameters=None,
 ):
-    """For each group, plot the highest_a_g_pct, highest_c_t_pct, highest_indel_pct, and tot_reads for each guide
+    """For each group, plot the highest_a_g_pct, highest_c_t_pct, highest_indel_pct, and tot_reads for each target
 
     Args:
         data_df (pd.DataFrame): a dataframe with data for plotting
-            includes columns: guide_id, guide_seq_no_gaps_with_pam, guide_name, guide_chr, guide_pos, region_anno
+            includes columns: target_id, target_name, target_seq_no_gaps_with_pam, target_chr, target_pos, region_anno
         sample_df (pd.DataFrame): a dataframe with sample information
             includes columns: Name, group
-        guide_plot_df (pd.DataFrame): a dataframe with guide letters for plotting the left sequence heatmap - made by 'create_guide_df_for_plotting'
-            includes rows for each guide, and columns for the guide letter to plot at that column (or .)
+        target_plot_df (pd.DataFrame): a dataframe with target sequence letters for plotting the left sequence heatmap - made by 'create_target_df_for_plotting'
+            includes rows for each target, and columns for the target sequence letter to plot at that column (or .)
         output_folder (str): folder to write output to. If None, will be the current working directory
         file_prefix (str, optional): prefix for output folder Defaults to "CRISPRessoSea"
         crispresso2_info (dict, optional): crispresso2_info object for this CRISPRessoSea run (Defaults to None)
         heatmap_fig_height (int, optional): the height of the heatmap figure (Defaults to 24)
         heatmap_fig_width (int, optional): the width of the heatmap figure (Defaults to 24)
-        heatmap_seq_plot_ratio (int, optional): the ratio of the width of the guide sequence plot to the data plot (>1 means the seq plot is larger than the data plot) (Defaults to 1)
+        heatmap_seq_plot_ratio (int, optional): the ratio of the width of the target sequence plot to the data plot (>1 means the seq plot is larger than the data plot) (Defaults to 1)
         heatmap_title_fontsize (int, optional): the fontsize of the plot titles for the heatmap (Defaults to 30)
         heatmap_y_tick_fontsize (int, optional): the fontsize of the y-axis tick labels for the heatmap (Defaults to 16)
         heatmap_x_tick_fontsize (int, optional): the fontsize of the x-axis tick labels for the heatmap (Defaults to 16)
@@ -2098,6 +2044,7 @@ def create_plots(
         heatmap_min_value (float, optional): the minimum value for the heatmap color scale (Defaults to None)
         plot_group_order (list, optional): the order of the groups to plot (Defaults to None)
         dot_plot_ylims (list, optional): the y-axis limits [min,max] for the dot plot (Defaults to [None, None])
+        sig_method_parameters (dict, optional): parameters for the significance method (Defaults to None)
 
     Returns:
         crispresso2_info with updated information about the added plot
@@ -2113,36 +2060,35 @@ def create_plots(
     groups = [group for group in groups if group != ""]  # remove empty groups
     groups = sorted(groups)
 
+    plot_details = [
+        {
+            "col_to_plot": "highest_a_g_pct",
+            "col_title": "Highest A->G %",
+            "plot_suffix": "highest_a_g_pct",
+        },
+        {
+            "col_to_plot": "highest_c_t_pct",
+            "col_title": "Highest C->T %",
+            "plot_suffix": "highest_c_t_pct",
+        },
+        {
+            "col_to_plot": "highest_indel_pct",
+            "col_title": "Highest Indel %",
+            "plot_suffix": "highest_indel_pct",
+        },
+        {
+            "col_to_plot": "tot_reads",
+            "col_title": "Total Reads",
+            "plot_suffix": "tot_reads",
+        },
+    ]
+
     for group in ["all", *groups]:
-        plot_details = [
-            {
-                "col_to_plot": "highest_a_g_pct",
-                "col_title": "Highest A->G %",
-                "plot_suffix": "highest_a_g_pct",
-            },
-            {
-                "col_to_plot": "highest_c_t_pct",
-                "col_title": "Highest C->T %",
-                "plot_suffix": "highest_c_t_pct",
-            },
-            {
-                "col_to_plot": "highest_indel_pct",
-                "col_title": "Highest Indel %",
-                "plot_suffix": "highest_indel_pct",
-            },
-            {
-                "col_to_plot": "tot_reads",
-                "col_title": "Total Reads",
-                "plot_suffix": "tot_reads",
-            },
-        ]
         cols_to_plot = [x["col_to_plot"] for x in plot_details]
         if group == "all":
             filtered_data_df = data_df
-        else:
-            sample_names = sample_df[sample_df.get("group", "") == group][
-                "Name"
-            ].tolist()
+        else: # if plotting for a specific group, filter the data_df to only include the samples in that group
+            sample_names = sample_df[sample_df.get("group", "") == group]["Name"].tolist()
             cols_to_keep = []
             for col in data_df.columns:
                 if not any(col.endswith(plot_col) for plot_col in cols_to_plot):
@@ -2152,33 +2098,23 @@ def create_plots(
                         cols_to_keep.append(col)
             filtered_data_df = data_df[cols_to_keep]
 
+        # for each type of plot (highest_a_g_pct, highest_c_t_pct, highest_indel_pct, tot_reads)
         for plot_detail in plot_details:
             col_to_plot = plot_detail["col_to_plot"]
             if group == "all":
                 col_title = plot_detail["col_title"]
             else:
                 col_title = f"{str(group).title()} {plot_detail['col_title']}"
+
             plot_suffix = f"{str(group)}_{plot_detail['plot_suffix']}"
             if file_prefix is not None:
                 file_name = f"{file_prefix}_{plot_suffix}"
             else:
                 file_name = plot_suffix
-            out_plot = os.path.join(output_folder, file_name)
-            if crispresso2_info is not None:
-                crispresso2_info["results"]["general_plots"][
-                    "summary_plot_names"
-                ].append(file_name)
-                crispresso2_info["results"]["general_plots"]["summary_plot_titles"][
-                    file_name
-                ] = col_title
-                crispresso2_info["results"]["general_plots"]["summary_plot_labels"][
-                    file_name
-                ] = ""
-                crispresso2_info["results"]["general_plots"]["summary_plot_datas"][
-                    file_name
-                ] = [("Aggregated Stats", "aggregated_stats_all.txt")]
-            plot_guides_and_heatmap(
-                guide_plot_df,
+
+            plot_targets_and_heatmap(
+                sample_df,
+                target_plot_df,
                 filtered_data_df,
                 col_to_plot,
                 col_title,
@@ -2195,18 +2131,16 @@ def create_plots(
                 df_data_heat_max=heatmap_max_value,
                 df_data_heat_min=heatmap_min_value,
                 legend_ncol=heatmap_legend_ncol,
+                sig_method_parameters=sig_method_parameters,
             )
+            if crispresso2_info is not None:
+                crispresso2_info["results"]["general_plots"]["summary_plot_names"].append(file_name)
+                crispresso2_info["results"]["general_plots"]["summary_plot_titles"][file_name] = col_title
+                crispresso2_info["results"]["general_plots"]["summary_plot_labels"][file_name] = ""
+                crispresso2_info["results"]["general_plots"]["summary_plot_datas"][file_name] = [("Aggregated Stats", "aggregated_stats_all.txt")]
+
             if group == "all":
-                df_highest_pct = data_df[
-                    [
-                        "guide_id",
-                        "guide_seq_no_gaps_with_pam",
-                        "guide_name",
-                        "guide_chr",
-                        "guide_pos",
-                    ]
-                    + [col for col in data_df.columns if col.endswith(col_to_plot)]
-                ]
+                subset_data_df = data_df[ [ "target_id", "target_name", ] + [col for col in data_df.columns if col.endswith(col_to_plot)] ]
                 dot_plot_suffix = f"{plot_suffix}_dot_plot"
                 if file_prefix is not None:
                     file_name = f"{file_prefix}_{dot_plot_suffix}"
@@ -2214,7 +2148,7 @@ def create_plots(
                     file_name = dot_plot_suffix
 
                 plot_dot_plot(
-                    df_highest_pct,
+                    subset_data_df,
                     col_to_plot,
                     col_title,
                     file_name,
@@ -2236,6 +2170,7 @@ def create_plots(
                     crispresso2_info["results"]["general_plots"]["summary_plot_datas"][
                         file_name
                     ] = [("Aggregated Stats", "aggregated_stats_all.txt")]
+
     return crispresso2_info
 
 
@@ -2245,7 +2180,7 @@ def plot_dot_plot(df, value_suffix, plot_title, file_prefix, sample_df, output_f
     Plots a dot plot showing average editing rate for each group
 
     Args:
-        df (pd.DataFrame): DataFrame containing the columns 'guide_id', 'guide_seq_no_gaps_with_pam', 'guide_name', 'guide_chr', 'guide_pos' and the columns to plot
+        df (pd.DataFrame): DataFrame containing the columns 'target_id', 'target_name' and the columns to plot
         value_suffix (str): Suffix for the value column (e.g. 'highest_a_g_pct')
         plot_title (str): Title for the plot (e.g. 'Highest A->G %')
         file_prefix (str): Prefix for the output file name
@@ -2259,8 +2194,8 @@ def plot_dot_plot(df, value_suffix, plot_title, file_prefix, sample_df, output_f
     melted_df = pd.melt(
         df,
         id_vars=[
-            "guide_id",
-            "guide_name",
+            "target_id",
+            "target_name",
         ],
         value_vars=[col for col in df.columns if col.endswith(value_suffix)],
         var_name="Sample",
@@ -2272,7 +2207,7 @@ def plot_dot_plot(df, value_suffix, plot_title, file_prefix, sample_df, output_f
     melted_df.drop(columns=["Sample"], inplace=True)
 
     # melted_df now looks like this:
-    # guide_id    guide_name  Name     Value
+    # target_id    target_name  Name     Value
     # 0_Fs2_ON  guide1      sample1  0.5
     # 1_Fs2_OFF1  guide1      sample1  0.5
 
@@ -2280,7 +2215,7 @@ def plot_dot_plot(df, value_suffix, plot_title, file_prefix, sample_df, output_f
         plt.figure(figsize=(20, 6))
         sns.stripplot(
             data=melted_df,
-            x="guide_name",
+            x="target_name",
             y="Value",
             hue="Name",
             jitter=0.3,
@@ -2288,8 +2223,8 @@ def plot_dot_plot(df, value_suffix, plot_title, file_prefix, sample_df, output_f
             alpha=0.6,
         )
         plt.ylim(dot_plot_ylims[0], dot_plot_ylims[1])
-        plt.title(f"Dot Plot of {plot_title} by Guide")
-        plt.xlabel("Guide Name")
+        plt.title(f"Dot Plot of {plot_title} by Target")
+        plt.xlabel("Target Name")
         plt.ylabel(plot_title)
         plt.xticks(fontsize=8, rotation=90)
         plt.subplots_adjust(left=0.1, right=0.9, top=0.9, bottom=0.2)
@@ -2304,7 +2239,7 @@ def plot_dot_plot(df, value_suffix, plot_title, file_prefix, sample_df, output_f
 
         """
         #has columns 
-        # guide_id   guide_name   Value   Name    group
+        # target_id   target_name   Value   Name    group
         # 0_f1_ON    gRNA_f1_ON   0.01    s1_ctl  ctl
         # 1_f1_OB1   gRNA_f1_OB1  0.01    s1_ctl  ctl
         """
@@ -2317,7 +2252,7 @@ def plot_dot_plot(df, value_suffix, plot_title, file_prefix, sample_df, output_f
         plt.figure(figsize=(20, 6))
         sns.stripplot(
                 data=melted_df_with_group,
-                x="guide_name",
+                x="target_name",
                 y="Value",
                 hue="group",
                 jitter=0.3,
@@ -2329,7 +2264,7 @@ def plot_dot_plot(df, value_suffix, plot_title, file_prefix, sample_df, output_f
             )
         sns.barplot(
             data=melted_df_with_group,
-            x="guide_name",
+            x="target_name",
             y="Value",
             hue="group",
             dodge=True,
@@ -2339,8 +2274,8 @@ def plot_dot_plot(df, value_suffix, plot_title, file_prefix, sample_df, output_f
         )
 
         plt.ylim(dot_plot_ylims[0], dot_plot_ylims[1])
-        plt.title(f"{plot_title} by Guide and Group")
-        plt.xlabel("Guide Name")
+        plt.title(f"{plot_title} by Target and Group")
+        plt.xlabel("Target Name")
         plt.ylabel(plot_title)
         plt.xticks(fontsize=8, rotation=90)
         plt.legend(title="Group")
@@ -2352,29 +2287,465 @@ def plot_dot_plot(df, value_suffix, plot_title, file_prefix, sample_df, output_f
 
 
 class SigMethod(Enum):
+    NONE = 0
     HARD_CUTOFF = 1
-    NEG_BINOMIAL = 2
+    MEAN_DIFF = 2
     T_TEST = 3
+    MANN_WHITNEY = 4
+    NEG_BINOMIAL = 5
 
+def parse_sig_method_parameters(sig_method_parameter_string, group_labels=None):
+    """
+    Parse the significance method parameters from a string or None.
+    """
+    significance_error_string = "Error in parsing sig_method_parameters value '"+sig_method_parameter_string+"': "
+    significance_info_string = "Please provide a significance method description in the form of:\n\tnone\n\thard_cutoff,cutoff\n\tneg_binomial,group1,group2,alpha\n\tt_test,group1,group2,alpha\n\tmean_diff,group1,group2,cutoff"
+    if sig_method_parameter_string is None or sig_method_parameter_string.strip() == "":
+        return {
+            'method': SigMethod.NONE,
+        }
+    
+    parameter_els = sig_method_parameter_string.split(",")
+    sig_method_parameters = {}
+    if parameter_els[0].lower() == "none":
+        return {
+            'method': SigMethod.NONE,
+        }
+    elif parameter_els[0].lower() == "hard_cutoff" or parameter_els[0].lower() == "hardcutoff" or parameter_els[0].lower() == "hc":
+        sig_method_parameters['method'] = SigMethod.HARD_CUTOFF
+        if len(parameter_els) < 2:
+            raise ValueError(significance_error_string + "Hard cutoff method requires a cutoff value.\n" + significance_info_string)
+        try:
+            sig_method_parameters['cutoff'] = float(parameter_els[1])
+        except ValueError:
+            raise ValueError(significance_error_string + "Cutoff value must be a number.")
+    elif parameter_els[0].lower() == "mean_diff":
+        sig_method_parameters['method'] = SigMethod.MEAN_DIFF
+        if len(parameter_els) < 3:
+            raise ValueError(significance_error_string + "Mean Difference method requires group_1, group_2, and cutoff values.\n" + significance_info_string)
+        if group_labels is None or parameter_els[1] not in group_labels or parameter_els[2] not in group_labels:
+            raise ValueError(significance_error_string + f"Groups {parameter_els[1]} and {parameter_els[2]} must be in the provided group labels: {group_labels}.")
+        sig_method_parameters['group_1'] = parameter_els[1]
+        sig_method_parameters['group_2'] = parameter_els[2]
+        try:
+            sig_method_parameters['cutoff'] = float(parameter_els[3]) if len(parameter_els) > 3 else 0.05
+        except ValueError:
+            raise ValueError(significance_error_string + "Cutoff value must be a number.")
+    elif parameter_els[0].lower() == "mann_whitney" or parameter_els[0].lower() == "mw":
+        sig_method_parameters['method'] = SigMethod.MANN_WHITNEY
+        if len(parameter_els) < 4:
+            raise ValueError(significance_error_string + "Mann-Whitney method requires group_1, group_2, and alpha values.\n" + significance_info_string)
+        if group_labels is None or parameter_els[1] not in group_labels or parameter_els[2] not in group_labels:
+            raise ValueError(significance_error_string + f"Groups {parameter_els[1]} and {parameter_els[2]} must be in the provided group labels: {group_labels}.")
+        sig_method_parameters['group_1'] = parameter_els[1]
+        sig_method_parameters['group_2'] = parameter_els[2]
+        try:
+            sig_method_parameters['alpha'] = float(parameter_els[3]) if len(parameter_els) > 3 else 0.05
+        except ValueError:
+            raise ValueError(significance_error_string + "Alpha value must be a number.")
+    elif parameter_els[0].lower() == "t_test" or parameter_els[0].lower() == "ttest" or parameter_els[0].lower() == "t":
+        sig_method_parameters['method'] = SigMethod.T_TEST
+        if len(parameter_els) < 4:
+            raise ValueError(significance_error_string + "T-test method requires group_1, group_2, and alpha values.\n" + significance_info_string)
+        if group_labels is None or parameter_els[1] not in group_labels or parameter_els[2] not in group_labels:
+            raise ValueError(significance_error_string + f"Groups {parameter_els[1]} and {parameter_els[2]} must be in the provided group labels: {group_labels}.")
+        sig_method_parameters['group_1'] = parameter_els[1]
+        sig_method_parameters['group_2'] = parameter_els[2]
+        try:
+            sig_method_parameters['alpha'] = float(parameter_els[3]) if len(parameter_els) > 3 else 0.05
+        except ValueError:
+            raise ValueError(significance_error_string + "Alpha value must be a number.")
+    elif parameter_els[0].lower() == "neg_binomial" or parameter_els[0].lower() == "nbinom" or parameter_els[0].lower() == "nb":
+        sig_method_parameters['method'] = SigMethod.NEG_BINOMIAL
+        print('parameter_els', parameter_els)
+        if len(parameter_els) < 4:
+            raise ValueError(significance_error_string + "Negative Binomial method requires group_1, group_2, and alpha values.\n" + significance_info_string)
+        if group_labels is None or parameter_els[1] not in group_labels or parameter_els[2] not in group_labels:
+            raise ValueError(significance_error_string + f"Groups {parameter_els[1]} and {parameter_els[2]} must be in the provided group labels: {group_labels}.")
+        sig_method_parameters['group_1'] = parameter_els[1]
+        sig_method_parameters['group_2'] = parameter_els[2]
+        try:
+            sig_method_parameters['alpha'] = float(parameter_els[3]) if len(parameter_els) > 3 else 0.05
+        except ValueError:
+            raise ValueError(significance_error_string + "Alpha value must be a number.")
+    else:
+        raise ValueError(significance_error_string + f"Unknown significance method: {parameter_els[0]}. {significance_info_string}")
+    
+    return sig_method_parameters
 
-def identify_significant_guides(method, df_data):
+def identify_significant_targets(df_data, df_total_count, sample_groups, sig_method_parameters):
     """
-    Method 1: Using a hard cutoff
-    Method 2: Use Negative Binomial distribution to model the data
-    Method 3: USe biological groupings to identify significant guides using a t-test
+    Note that df_data values are percents - e.g. 0.5 = 0.5% editing, 25.5 = 25.5% editing
+    Method 1: Hard cutoff, return values >= cutoff
+    Method 2: Mean difference, return values where the mean difference between two groups is >= cutoff
+    Method 3: Mann-Whitney, return values where the p-value is <= alpha
+    Method 4: T-test, return values where the p-value is <= alpha
+    Method 5: Negative Binomial, return values where the group effect is significant
+     
+    :param df_data: DataFrame with data to analyze, indexed by target_id and columns as samples
+    :param df_total_count: DataFrame with total counts for each sample, indexed by sample name
+    :param sample_groups: List of sample groups corresponding to the columns in df_data
+    :param sig_method_parameters: Dictionary with parameters for the significance method, e.g. {'method': SigMethod.HARD_CUTOFF, 'cutoff': 0.05}
+
+    :return: Tuple of DataFrame with True/False for significant results and a DataFrame with results table (if applicable)
     """
+    
+    if sig_method_parameters is None or sig_method_parameters['method'] == SigMethod.NONE:
+        return None, None
+
+    method = sig_method_parameters['method']
     if method == SigMethod.HARD_CUTOFF:
-        df_data = df_data > 0.1
-    elif method == SigMethod.NEG_BINOMIAL:
-        pass
+        cutoff = sig_method_parameters['cutoff']
+        df_sig = df_data >= cutoff
+        return df_sig, None
+
+    elif method == SigMethod.MEAN_DIFF:
+        df_sig = pd.DataFrame(False, index=df_data.index, columns=df_data.columns)
+
+        res_table_rows = []
+        group_1 = sig_method_parameters['group_1']
+        group_1_inds = [i for i, x in enumerate(sample_groups) if x == group_1]
+        group_2 = sig_method_parameters['group_2']
+        group_2_inds = [i for i, x in enumerate(sample_groups) if x == group_2]
+
+        # Don't do calculation if either group is empty
+        if len(group_1_inds) == 0 or len(group_2_inds) == 0:
+            return df_sig, None
+        
+        for idx, (df_idx, target_row) in enumerate(df_data.iterrows()):
+            #check if any values are na
+            if target_row[group_1_inds].isna().any() or target_row[group_2_inds].isna().any():
+                res_table_rows.append([
+                    group_1_data.nanmean(),
+                    group_2_data.nanmean(),
+                    np.nan,  # Coefficient for the group effect
+                    'NA values present in data',
+                    False,  # No significance if NA values are present
+                ])
+                continue
+            group_1_data = target_row[group_1_inds].values
+            group_2_data = target_row[group_2_inds].values
+
+            # Calculate mean difference
+            mean_diff = np.mean(group_1_data) - np.mean(group_2_data)
+            is_greater_than_mean_diff = mean_diff >= sig_method_parameters['cutoff']
+
+            # Append results to the list
+            res_table_rows.append([
+                group_1_data.mean(),
+                group_2_data.mean(),
+                mean_diff,
+                'Mean Difference',
+                is_greater_than_mean_diff
+            ])
+        res_table_df = pd.DataFrame(
+            res_table_rows,
+            columns=[group_1 + '_mean', group_2 + '_mean', 'mean_diff', 'test', 'significant']
+        )
+        res_table_df.index = df_data.index
+
+        # Assign significant results to df_sig
+        for idx, (df_idx, target_row) in enumerate(res_table_df.iterrows()):
+            if target_row['significant']:
+                if target_row[group_1 + '_mean'] > target_row[group_2 + '_mean']:
+                    df_sig.iloc[idx, group_1_inds] = True
+                else:
+                    df_sig.iloc[idx, group_2_inds] = True
+
+        #merge res_table_df with df_data
+        res_table_df = res_table_df.merge(df_data, left_index=True, right_index=True)
+
+        return df_sig, res_table_df
+
+    elif method == SigMethod.MANN_WHITNEY:
+        #create df of False with rows and columns of df_data
+        df_sig = pd.DataFrame(False, index=df_data.index, columns=df_data.columns)
+
+        res_table_rows = []
+        group_1 = sig_method_parameters['group_1']
+        group_1_inds = [i for i, x in enumerate(sample_groups) if x == group_1]
+        group_2 = sig_method_parameters['group_2']
+        group_2_inds = [i for i, x in enumerate(sample_groups) if x == group_2]
+
+        #don't do calculation if either group is empty
+        if len(group_1_inds) == 0 or len(group_2_inds) == 0:
+            return df_sig, None
+
+        for idx, target_row in df_data.iterrows():
+            group_1_data = target_row[group_1_inds].values
+            group_2_data = target_row[group_2_inds].values
+
+            # Perform Mann-Whitney U test
+            u_stat, p_val = sp.mannwhitneyu(group_1_data, group_2_data, alternative='two-sided')
+
+
+            res_table_rows.append([
+                group_1_data.mean(),
+                group_2_data.mean(),
+                u_stat,
+                p_val,
+                'Mann-Whitney U test',
+            ])
+
+        res_table_df = pd.DataFrame(res_table_rows, columns=[group_1 + '_mean', group_2 + '_mean', 'u_stat', 'p_val', 'test'])
+        non_na_p_vals = res_table_df['p_val'].dropna()
+        p_val_na_inds = res_table_df['p_val'].isna()
+
+        p_corrected_res = multipletests(non_na_p_vals, method='fdr_bh', alpha=sig_method_parameters['alpha'])[1] #this is added to recent versions of scipy
+
+        corrected_p = pd.Series(np.nan, index=res_table_df.index)
+        corrected_p[~p_val_na_inds] = p_corrected_res
+
+        res_table_df['bh_adj_p_val'] = corrected_p
+        res_table_df['significant'] = res_table_df['bh_adj_p_val'] <= sig_method_parameters['alpha']
+        res_table_df.index = df_data.index
+
+        # .. hating how pandas does indexing and access with multi-indexes
+        for idx, (df_idx, target_row) in enumerate(res_table_df.iterrows()):
+            if target_row['significant']:
+                if target_row[group_1 + '_mean'] > target_row[group_2 + '_mean']:
+                    # Assign True to the appropriate columns for the current row
+                    df_sig.iloc[idx,group_1_inds] = True
+                else:
+                    df_sig.iloc[idx,group_2_inds] = True
+
+        res_table_df = res_table_df.merge(df_data, left_index=True, right_index=True)
+        return df_sig, res_table_df
+
     elif method == SigMethod.T_TEST:
-        pass
+        #create df of False with rows and columns of df_data
+        df_sig = pd.DataFrame(False, index=df_data.index, columns=df_data.columns)
 
-    return df_data
+        res_table_rows = []
+        group_1 = sig_method_parameters['group_1']
+        group_1_inds = [i for i, x in enumerate(sample_groups) if x == group_1]
+        group_2 = sig_method_parameters['group_2']
+        group_2_inds = [i for i, x in enumerate(sample_groups) if x == group_2]
+
+        #don't do calculation if either group is empty
+        if len(group_1_inds) == 0 or len(group_2_inds) == 0:
+            return df_sig, None
+
+        for idx, target_row in df_data.iterrows():
+            group_1_data = target_row[group_1_inds].values
+            group_2_data = target_row[group_2_inds].values
+
+            t_stat, p_val = sp.ttest_ind(group_1_data, group_2_data, equal_var=False)
+
+            res_table_rows.append([
+                group_1_data.mean(),
+                group_2_data.mean(),
+                t_stat,
+                p_val,
+                'Welch T-test',
+            ])
+
+        res_table_df = pd.DataFrame(res_table_rows, columns=[group_1 + '_mean', group_2 + '_mean', 't_stat', 'p_val', 'test'])
+        non_na_p_vals = res_table_df['p_val'].dropna()
+        p_val_na_inds = res_table_df['p_val'].isna()
+
+        p_corrected_res = multipletests(non_na_p_vals, method='fdr_bh', alpha=sig_method_parameters['alpha'])[1] #this is added to recent versions of scipy
+
+        corrected_p = pd.Series(np.nan, index=res_table_df.index)
+        corrected_p[~p_val_na_inds] = p_corrected_res
+
+        res_table_df['bh_adj_p_val'] = corrected_p
+        res_table_df['significant'] = res_table_df['bh_adj_p_val'] <= sig_method_parameters['alpha']
+        res_table_df.index = df_data.index
+
+        # .. hating how pandas does indexing and access with multi-indexes
+        for idx, (df_idx, target_row) in enumerate(res_table_df.iterrows()):
+            if target_row['significant']:
+                if target_row[group_1 + '_mean'] > target_row[group_2 + '_mean']:
+                    # Assign True to the appropriate columns for the current row
+                    df_sig.iloc[idx,group_1_inds] = True
+                else:
+                    df_sig.iloc[idx,group_2_inds] = True
+
+        res_table_df = res_table_df.merge(df_data, left_index=True, right_index=True)
+        return df_sig, res_table_df
 
 
-def plot_guides_and_heatmap(
-    guide_plot_df,
+
+
+    elif method == SigMethod.NEG_BINOMIAL:
+        """
+        This is roughly equivalent to the R code:
+        mod_counts = c(5,1,10,8,0,2,20,3)
+        tot_reads = c(200, 950, 1200, 1100, 980, 1050, 1500, 1150)
+        group = c(0,0,0,0,1,1,1,1)
+
+        data = data.frame(tot_reads, mod_counts, group)
+        data$mod_counts_adj = data$mod_counts + 1
+        model <- glm.nb(mod_counts_adj ~ group + offset(log(tot_reads)), data = data, init.theta = 1)
+        summary(model)
+
+        ~~~~
+        R output:
+        ***
+        group        -0.6510     0.5945  -1.095    0.274    
+        ---
+        Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
+
+        (Dispersion parameter for Negative Binomial(1.8163) family taken to be 1)
+
+            Null deviance: 9.7586  on 7  degrees of freedom
+        Residual deviance: 8.6166  on 6  degrees of freedom
+        AIC: 53.893
+
+        Number of Fisher Scoring iterations: 1
+
+
+                    Theta:  1.82 
+                Std. Err.:  1.14 
+
+        2 x log-likelihood:  -47.893
+
+        ~~~
+
+        Python output: 
+
+        Generalized Linear Model Regression Results                  
+        ==============================================================================
+        Dep. Variable:         mod_counts_adj   No. Observations:                    8
+        Model:                            GLM   Df Residuals:                        6
+        Model Family:        NegativeBinomial   Df Model:                            1
+        Link Function:                    Log   Scale:                          1.0000
+        Method:                          IRLS   Log-Likelihood:                -24.394
+        Date:                Mon, 02 Jun 2025   Deviance:                       5.4301
+        Time:                        14:46:23   Pearson chi2:                     5.70
+        No. Iterations:                     5   Pseudo R-squ. (CS):             0.1014
+        Covariance Type:            nonrobust                                         
+        ================================================================================
+                        coef    std err          z      P>|z|      [0.025      0.975]
+        --------------------------------------------------------------------------------
+        const           -5.2140      0.539     -9.680      0.000      -6.270      -4.158
+        group_binary     0.7193      0.761      0.945      0.345      -0.772       2.211
+        ================================================================================
+        
+        R p-value: 0.274
+        Python p-value: 0.345 
+        
+        #note that I can't get it to match up with Akcakaya et al. 2018, but it is close enough to be useful.
+        #Note that this is the same as the R code:
+        #mod_counts = c(17288, 13277, 13630, 625, 110, 91)
+        #tot_reads = c(113499, 87435, 81144, 80495, 99696, 54993)
+        #group = c(0,0,0,0,1,1)
+
+        #supplemental 
+        #rows 9-13
+        mod_counts = c(17288, 13277, 13630, 625, 110, 91)
+        tot_reads = c(113499, 87435, 81144, 80495, 99696, 54993)
+        
+        """
+        # Create a DataFrame of False with the same shape as df_data
+        df_sig = pd.DataFrame(False, index=df_data.index, columns=df_data.columns)
+
+        res_table_rows = []
+        group_1 = sig_method_parameters['group_1']
+        group_1_inds = [i for i, x in enumerate(sample_groups) if x == group_1]
+        group_2 = sig_method_parameters['group_2']
+        group_2_inds = [i for i, x in enumerate(sample_groups) if x == group_2]
+
+        # Don't do calculation if either group is empty
+        if len(group_1_inds) == 0 or len(group_2_inds) == 0:
+            return df_sig, None
+
+        for idx, (df_idx, target_row) in enumerate(df_data.iterrows()):
+            #check if any values are na
+            group_1_data = target_row[group_1_inds].values / 100 # convert to proportions
+            group_2_data = target_row[group_2_inds].values / 100
+
+            if target_row[group_1_inds].isna().any() or target_row[group_2_inds].isna().any():
+                res_table_rows.append([
+                    np.nanmean(group_1_data)*100, #change back to percents
+                    np.nanmean(group_2_data)*100,
+                    np.nan,  # Coefficient for the group effect
+                    np.nan,
+                    'NA values present in data',
+                ])
+                continue
+
+            group_1_total_counts = df_total_count.iloc[idx, group_1_inds].values
+            group_2_total_counts = df_total_count.iloc[idx, group_2_inds].values
+            group_1_mod_counts = group_1_data * group_1_total_counts
+            group_2_mod_counts = group_2_data * group_2_total_counts
+
+            group_labels = np.array([0] * len(group_1_data) + [1] * len(group_2_data))
+
+            mod_counts = np.concatenate([group_1_mod_counts, group_2_mod_counts])
+            total_counts = np.concatenate([group_1_total_counts, group_2_total_counts])
+
+            df = pd.DataFrame({
+                'group': group_labels,
+                'total_counts': total_counts,
+                'mod_counts': mod_counts
+            })
+
+            df['mod_counts_adj'] = df['mod_counts'] + 1
+
+            # Design matrix
+            df['group_binary'] = (df['group'] == 0).astype(int)
+            X = sm.add_constant(df['group_binary'])
+
+            # Response
+            y = df['mod_counts_adj']
+
+            # Offset (log total reads)
+            offset = np.log(df['total_counts']+1)
+
+            model = sm.GLM(y, X, family=sm.families.NegativeBinomial(alpha=1), offset=offset)
+            result = model.fit()
+
+            p_val = result.pvalues['group_binary']
+
+            # Combine data and create a group label
+            combined_data = np.concatenate([group_1_data, group_2_data])
+            combined_total_counts = np.concatenate([group_1_total_counts, group_2_total_counts])
+            group_labels = np.array([0] * len(group_1_data) + [1] * len(group_2_data))
+
+            res_table_rows.append([
+                group_1_data.mean() * 100,  # Convert back to percentage
+                group_2_data.mean() * 100,
+                result.params['group_binary'],  # Coefficient for the group effect
+                p_val,
+                'Negative Binomial',
+            ])
+
+        res_table_df = pd.DataFrame(
+            res_table_rows,
+            columns=[group_1 + '_mean', group_2 + '_mean', 'coef', 'p_val', 'test']
+        )
+        non_na_p_vals = res_table_df['p_val'].dropna()
+        p_val_na_inds = res_table_df['p_val'].isna()
+
+        # Correct p-values using Benjamini-Hochberg FDR
+        p_corrected_res = multipletests(non_na_p_vals, method='fdr_bh', alpha=sig_method_parameters['alpha'])[1]
+
+        corrected_p = pd.Series(np.nan, index=res_table_df.index)
+        corrected_p[~p_val_na_inds] = p_corrected_res
+
+        res_table_df['bh_adj_p_val'] = corrected_p
+        res_table_df['significant'] = res_table_df['bh_adj_p_val'] <= sig_method_parameters['alpha']
+        res_table_df.index = df_data.index
+
+        # Assign significant results to df_sig
+        for idx, (df_idx, target_row) in enumerate(res_table_df.iterrows()):
+            if target_row['significant']:
+                if target_row[group_1 + '_mean'] > target_row[group_2 + '_mean']:
+                    df_sig.iloc[idx, group_1_inds] = True
+                else:
+                    df_sig.iloc[idx, group_2_inds] = True
+
+        res_table_df = res_table_df.merge(df_data, left_index=True, right_index=True)
+        return df_sig, res_table_df
+
+    return None, None
+
+
+def plot_targets_and_heatmap(
+    sample_df,
+    target_plot_df,
     df_data,
     col_to_plot,
     df_data_title,
@@ -2384,7 +2755,7 @@ def plot_guides_and_heatmap(
     row_annotations=None,
     fig_height=24,
     fig_width=24,
-    guide_names=None,
+    target_names=None,
     seq_plot_ratio=1,
     title_fontsize=30,
     y_tick_fontsize=16,  # 16
@@ -2392,16 +2763,18 @@ def plot_guides_and_heatmap(
     nucleotide_fontsize=14,  # 12
     legend_title_fontsize=20,  # 18
     legend_ncol=None,
+    sig_method_parameters=None,
 ):
     """
-    Plot a heatmap of guide sequences (left) and the data (right)
-    The plot of guide sequences will contain
-        '-' if there is a base missing in the guide (relative to the on-target)
-        '+' or 'AC' if there is a base added in the guide (relative to the on-target)
+    Plot a heatmap of target sequences (left) and the data (right)
+    The plot of target sequences will contain
+        '-' if there is a base missing in the target (relative to the on-target)
+        '+' or 'AC' if there is a base added in the target (relative to the on-target)
 
     params:
-    - guide_plot_df: a dataframe of guide sequences with each column showing a nucleotide position, and each row showing the bases for each guide
-    - df_to_plot: a dataframe of data to plot in a heatmap with rows corresponding to the rows in guide_plot_df
+    - sample_df: a dataframe of sample information with columns: Name, group
+    - target_plot_df: a dataframe of target sequences with each column showing a nucleotide position, and each row showing the bases for each target
+    - df_to_plot: a dataframe of data to plot in a heatmap with rows corresponding to the rows in target_plot_df
     - df_data_title: the title of the heatmap
     - df_data_heat_max: the maximum value for the heatmap
     - df_data_heat_min: the minimum value for the heatmap
@@ -2409,33 +2782,45 @@ def plot_guides_and_heatmap(
     - row_annotations: a list of gene annotations for the rows in df_data (if None, no annotations will be displayed)
     - fig_height: the height of the figure
     - fig_width: the width of the figure
-    - guide_names: a list of guide names to use for the y-axis of the heatmap (if None, the index of guide_plot_df will be used)
-    - seq_plot_ratio: the ratio of the width of the guide sequence plot to the data plot (>1 means the seq plot is larger than the data plot)
+    - target_names: a list of target names to use for the y-axis of the heatmap (if None, the index of target_plot_df will be used)
+    - seq_plot_ratio: the ratio of the width of the target sequence plot to the data plot (>1 means the seq plot is larger than the data plot)
     - title_fontsize: the fontsize of the plot titles
     - y_tick_fontsize: the fontsize of the y-axis tick labels
     - x_tick_fontsize: the fontsize of the x-axis labels
     - nucleotide_fontsize: the fontsize of the nucleotide labels
     - legend_title_fontsize: the fontsize of the legend title
     - legend_ncol: the number of columns in the legend (if None, each value legend value will have a columns)
+    - sig_method_parameters: parameters for the significance method (if None, no significance will be calculated)
 
     returns:
     - None
     """
-    cols_to_plot = [col for col in df_data.columns if col_to_plot in col]
+    cols_to_plot = [col for col in df_data.columns if col.endswith(col_to_plot)]
     if len(cols_to_plot) == 0:
-        raise Exception(
-            "No columns found in df_data with suffix "
-            + col_to_plot
-            + " in columns: "
-            + str(list(df_data.columns))
-        )
+        raise Exception("No columns found in df_data with suffix " + col_to_plot + " in columns: " + str(list(df_data.columns)))
     df_to_plot = df_data[cols_to_plot]
+    df_to_plot.index = df_data['target_id']
     df_to_plot.columns = [col.replace("_" + col_to_plot, "") for col in cols_to_plot]
 
-    df_sig = identify_significant_guides(
-        SigMethod.HARD_CUTOFF,
-        df_to_plot,
-    )
+    #calculate total counts for negative binomial
+    total_count_cols = [col for col in df_data.columns if col.endswith("tot_reads")]
+    if len(total_count_cols) == 0:
+        raise Exception("No total count columns found in " + str(list(df_data.columns)))
+    df_total_count = df_data[total_count_cols]
+    df_total_count.index = df_data['target_id']
+    df_total_count.columns = [col.replace('_tot_reads', "") for col in cols_to_plot]
+
+    sample_groups = []
+    for sample_name in df_to_plot.columns:
+        sample_group = sample_df[sample_df["Name"] == sample_name]["group"].values[0]
+        sample_groups.append(sample_group)
+
+    df_sig, df_pvals = identify_significant_targets(df_data=df_to_plot, df_total_count=df_total_count, sample_groups=sample_groups, sig_method_parameters=sig_method_parameters)
+
+    if df_pvals is not None:
+        p_value_output = outfile_name + ".p_values.txt"
+        df_pvals.to_csv(p_value_output, sep="\t", index=True, header=True)
+        info('Saved p-values to ' + p_value_output)
 
     # Create a custom color palette for the letters
     color_mapping = {
@@ -2464,7 +2849,7 @@ def plot_guides_and_heatmap(
             return letter_to_int["+"]
         return letter_to_int["default"]
 
-    df_mapped = guide_plot_df.applymap(lambda x: get_int_from_letter(x))
+    df_mapped = target_plot_df.applymap(lambda x: get_int_from_letter(x))
 
     # Create the figure and gridspec
     fig = plt.figure(figsize=(fig_width, fig_height))
@@ -2477,11 +2862,11 @@ def plot_guides_and_heatmap(
         wspace=0.05,
     )
 
-    # Create the first heatmap (guide_seqs and mismatches)
+    # Create the first heatmap (target seqs and mismatches)
     ax1 = fig.add_subplot(gs[0, 0])
     sns.heatmap(
         df_mapped,
-        annot=guide_plot_df,
+        annot=target_plot_df,
         fmt="",
         cmap=cmap,
         cbar=False,
@@ -2492,10 +2877,11 @@ def plot_guides_and_heatmap(
         annot_kws={"fontsize": nucleotide_fontsize},
     )
     ax1.tick_params(axis="y", labelsize=y_tick_fontsize)
-    # replace y tick lables with guide names
-    if guide_names is not None:
-        ax1.set_yticklabels(guide_names, rotation=0, fontsize=y_tick_fontsize)
-    ax1.set_title("Guide sequences", fontsize=title_fontsize)
+    # replace y tick lables with target names
+    if target_names is not None:
+        ax1.set_yticklabels(target_names, rotation=0, fontsize=y_tick_fontsize)
+    ax1.set_title("Target sequences", fontsize=title_fontsize)
+    ax1.set_ylabel('')
 
     # Create the second heatmap (continuous data from df_data)
     ax2 = fig.add_subplot(gs[0, 1])
@@ -2531,9 +2917,11 @@ def plot_guides_and_heatmap(
     )
     ax_heat.collections[0].cmap.set_bad("0.7")
     ax_heat.collections[0].colorbar.ax.tick_params(labelsize=y_tick_fontsize)
+    ax_heat.set_ylabel('')
     ax2.set_title(df_data_title, fontsize=title_fontsize)
     ax2.tick_params(axis="x", labelsize=x_tick_fontsize, labelrotation=90)
     ax2.set_yticks([])
+    ax2.set_ylabel('')
 
     info("Plotted heatmap to " + outfile_name)
 
@@ -2562,7 +2950,7 @@ def plot_guides_and_heatmap(
                 if df_sig.iloc[i, j]:
                     ax_heat.add_patch(
                         plt.Rectangle(
-                            (j, i), 1, 1, fill=False, edgecolor="red", lw=1, alpha=0.6
+                            (j, i), 1, 1, fill=False, edgecolor="red", lw=2, alpha=0.6
                         )
                     )
 
@@ -2591,7 +2979,7 @@ def plot_guides_and_heatmap(
     ax_legend.legend(
         handles=patches,
         loc="center",
-        title="Guide nucleotides",
+        title="Target nucleotides",
         ncol=legend_ncol,
         bbox_to_anchor=(0.5, 1),
         title_fontsize=legend_title_fontsize,
@@ -2609,12 +2997,12 @@ def plot_guides_and_heatmap(
     plt.close(fig)
 
 
-def add_region_annotations_to_guide_df(guide_df, gene_annotations):
+def add_region_annotations_to_target_df(target_df, gene_annotations):
     """
-    Add gene annotations to the guide dataframe
+    Add gene annotations to the target dataframe
 
     params:
-    - guide_df: the guide dataframe. This function expects the columns: guide_chr, guide_pos
+    - target_df: the target dataframe. This function expects the columns: target_chr, target_pos
     - gene_annotations: the path to the gene annotations file. This function expects a column for:
         chromosome ('chrom' or 'chr'),
         start ('txStart','start', or 'Start'),
@@ -2622,7 +3010,7 @@ def add_region_annotations_to_guide_df(guide_df, gene_annotations):
         gene name ('name' and/or 'name2')
 
     returns:
-    - the guide dataframe with gene annotations added in the column 'region_anno'
+    - the target dataframe with gene annotations added in the column 'region_anno'
     """
     info(f"Loading gene coordinates from annotation file: {gene_annotations}...")
     try:
@@ -2668,9 +3056,9 @@ def add_region_annotations_to_guide_df(guide_df, gene_annotations):
 
     def find_overlapping_genes(row, df_genes):
         df_genes_overlapping = df_genes.loc[
-            (df_genes.chrom == row.guide_chr)
-            & (df_genes.txStart <= row.guide_pos)
-            & (row.guide_pos <= df_genes.txEnd)
+            (df_genes.chrom == row.target_chr)
+            & (df_genes.txStart <= row.target_pos)
+            & (row.target_pos <= df_genes.txEnd)
         ]
         genes_overlapping = []
 
@@ -2689,10 +3077,10 @@ def add_region_annotations_to_guide_df(guide_df, gene_annotations):
         row["region_anno"] = ",".join(genes_overlapping)
         return row
 
-    guide_df["region_anno"] = ""
-    guide_df = guide_df.apply(lambda row: find_overlapping_genes(row, df_genes), axis=1)
+    target_df["region_anno"] = ""
+    target_df = target_df.apply(lambda row: find_overlapping_genes(row, df_genes), axis=1)
 
-    return guide_df
+    return target_df
 
 
 def replot(
@@ -2714,9 +3102,10 @@ def replot(
     dot_plot_ylims=[None, None],
     heatmap_max_value=None,
     heatmap_min_value=None,
+    sig_method_parameters=None,
 ):
     """
-    Replot a completed analysis using a reordered guide file
+    Replot a completed analysis using a reordered target file
 
     params:
     - reordered_stats_file: the reordered stats file based on (having the same columns and layout as) a previously-completed aggregated_stats_all.txt file
@@ -2726,7 +3115,7 @@ def replot(
     - name_column: the column to use as the displayed name for each sample in the plot
     - fig_height: the height of the figure
     - fig_width: the width of the figure
-    - seq_plot_ratio: the ratio of the width of the guide sequence plot to the data plot (>1 means the seq plot is larger than the data plot)
+    - seq_plot_ratio: the ratio of the width of the target sequence plot to the data plot (>1 means the seq plot is larger than the data plot)
     - title_fontsize: the fontsize of the plot titles for the heatmap
     - y_tick_fontsize: the fontsize of the y-axis tick labels for the heatmap
     - x_tick_fontsize: the fontsize of the x-axis tick labels for the heatmap
@@ -2736,6 +3125,7 @@ def replot(
     - plot_group_order: the order of the groups to plot (if None, the groups will be sorted alphabetically)
     - heatmap_max_value: the maximum value for the heatmap color scale (if None, the maximum value will be determined automatically)
     - heatmap_min_value: the minimum value for the heatmap color scale (if None, the minimum value will be determined automatically)
+    - sig_method_parameters: parameters for the significance method (if None, no significance will be calculated)
     """
 
     sample_df = parse_sample_file(reordered_sample_file)
@@ -2745,9 +3135,14 @@ def replot(
             os.makedirs(output_folder, exist_ok=True)
 
     reordered_stats_df = pd.read_csv(reordered_stats_file, sep="\t")
-    guide_plot_df = create_guide_df_for_plotting(reordered_stats_df)
+    target_plot_df = create_target_df_for_plotting(reordered_stats_df)
 
-    info("Plotting for " + str(len(reordered_stats_df)) + " guides", {"percent_complete": 20})
+    if name_column is not None:
+        if name_column not in sample_df.columns:
+            raise Exception(f"Column '{name_column}' not found in sample file. Available columns: {list(sample_df.columns)}")
+            
+
+    info("Plotting for " + str(len(reordered_stats_df)) + " targets", {"percent_complete": 20})
 
     # reorder the stats column to the order of the sample file
     sample_cols_reordered = []
@@ -2767,7 +3162,7 @@ def replot(
     create_plots(
         data_df=reordered_stats_df,
         sample_df=sample_df,
-        guide_plot_df=guide_plot_df,
+        target_plot_df=target_plot_df,
         output_folder=output_folder,
         file_prefix=file_prefix,
         heatmap_fig_height=fig_height,
@@ -2783,11 +3178,12 @@ def replot(
         heatmap_min_value=heatmap_min_value,
         plot_group_order=plot_group_order,
         dot_plot_ylims=dot_plot_ylims,
+        sig_method_parameters=sig_method_parameters,
     )
 
     info('Replotting complete', {"percent_complete": 100})
 
-def make_guide_info_file(guide_seq_str, guide_name_str, guide_pam, genome_file, max_mismatches, max_rna_bulges, max_dna_bulges, output_folder, file_prefix):
+def make_target_info_file(guide_seq_str, guide_name_str, guide_pam, genome_file, max_mismatches, max_rna_bulges, max_dna_bulges, output_folder, file_prefix):
     """
     Make a guide info file from a list of guides. The guide info file will contain the columns:
     If not assigned, guide names will be assigned as "guide_0", "guide_1", etc.
@@ -2861,6 +3257,7 @@ def make_guide_info_file(guide_seq_str, guide_name_str, guide_pam, genome_file, 
 
     debug(casoffinder_cmd)
     if not os.path.exists(casoffinder_output_file):
+        debug(f'Cannot find casoffinder output file: {casoffinder_output_file}.')
         #check casoffinder
         try:
             casoffinder_result = subprocess.check_output('cas-offinder --version', stderr=subprocess.STDOUT, shell=True)
@@ -2905,14 +3302,14 @@ def make_guide_info_file(guide_seq_str, guide_name_str, guide_pam, genome_file, 
                 bulge_count = int(line_els[8])
                 total_diff_count = mismatch_count + bulge_count
 
-                guide_name = None
+                target_name = None
                 for guide_seq in guide_seqs:
                     if ontarget_seq.replace("-","").replace("N","").upper() == guide_seq.upper():
-                        guide_name = guide_names[guide_seqs.index(guide_seq)]
+                        target_name = guide_names[guide_seqs.index(guide_seq)]
                         break
-                if guide_name is None:
+                if target_name is None:
                     warn('Cannot parse casoffinder output. Cannot find guide name for guide sequence: ' + ontarget_seq)
-                    guide_name = ontarget_seq.replace("-","").replace("N","")
+                    target_name = ontarget_seq.replace("-","").replace("N","")
                 
                 offtarget_seq = line_els[3][1:-pam_len].replace("-","").replace("N","")
                 offtarget_pam = line_els[3][-pam_len:]
@@ -2920,7 +3317,7 @@ def make_guide_info_file(guide_seq_str, guide_name_str, guide_pam, genome_file, 
                 mismatch_string = 'Mismatches: ' + str(mismatch_count) + ', Bulges: ' + line_els[1] + ' ' + str(bulge_count)
 
                 locus_string = chrom+":"+strand+loc
-                casoffinder_annotations.append([guide_name, guide_name + "_OB" + str(total_diff_count) + "_" + chrom + "_" + loc,
+                casoffinder_annotations.append([target_name, target_name + "_OB" + str(total_diff_count) + "_" + chrom + "_" + loc,
                                                      offtarget_seq, offtarget_pam, str(total_diff_count), locus_string, mismatch_string])
     else: # parse old casoffinder output
         with open (casoffinder_output_file,'r') as cin:
@@ -2936,21 +3333,21 @@ def make_guide_info_file(guide_seq_str, guide_name_str, guide_pam, genome_file, 
                 offtarget_seq = line_els[3][0:-pam_len]
                 offtarget_pam = line_els[3][-pam_len:]
 
-                guide_name = None
+                target_name = None
                 for guide_seq in guide_seqs:
                     if seq.replace("-","").upper() == guide_seq.upper():
-                        guide_name = guide_names[guide_seqs.index(guide_seq)]
+                        target_name = guide_names[guide_seqs.index(guide_seq)]
                         break
-                if guide_name is None:
+                if target_name is None:
                     warn('Cannot parse casoffinder output. Cannot find guide name for guide sequence: ' + seq)
-                    guide_name = guide_seq
+                    target_name = guide_seq
 
                 mismatch_string = 'Mismatches: ' + str(mismatch_count)
 
                 locus_string = chrom+":"+strand+loc
-                casoffinder_annotations.append([guide_name, guide_name + "_OB" + str(total_diff_count) + "_" + chrom + "_" + loc,offtarget_seq, offtarget_pam, str(total_diff_count), locus_string, mismatch_string])
+                casoffinder_annotations.append([target_name, target_name + "_OB" + str(total_diff_count) + "_" + chrom + "_" + loc,offtarget_seq, offtarget_pam, str(total_diff_count), locus_string, mismatch_string])
 
-    parsed_output = pd.DataFrame(casoffinder_annotations,columns=['Name','Anno','Sequence','PAM','#MM','Locus','Mismatch_info'])
+    parsed_output = pd.DataFrame(casoffinder_annotations,columns=['Guide','Target','Sequence','PAM','#MM','Locus','Mismatch_info'])
     info('Found %d off-target sites using Cas-OFFinder'%(parsed_output.shape[0]), {'percent_complete': 80})
 
     parsed_output = parsed_output.sort_values(by=['#MM'], ascending=True)
@@ -2978,9 +3375,9 @@ if __name__ == "__main__":
         "-o", "--output_folder", help="Output folder", default=None
     )
     process_parser.add_argument(
-        "-g",
-        "--guide_file",
-        help="Guide file - list of guides with one guide per line",
+        "-t",
+        "--target_file",
+        help="Target file - list of targets with one target per line and the headers ['Guide','Sequence','PAM','#MM','Locus']",
         required=True,
     )
     process_parser.add_argument(
@@ -3043,8 +3440,8 @@ if __name__ == "__main__":
         action="store_true",
     )
     process_parser.add_argument(
-        "--plot_only_complete_guides",
-        help="Plot only guides with all values. If not set, all guides will be plotted.",
+        "--plot_only_complete_targets",
+        help="Plot only targets with all values. If not set, all targets will be plotted.",
         action="store_true",
     )
     process_parser.add_argument(
@@ -3055,12 +3452,12 @@ if __name__ == "__main__":
     )
     process_parser.add_argument(
         "--sort_based_on_mismatch",
-        help="Sort guides based on mismatch count. If true, the on-target will always be first",
+        help="Sort targets based on mismatch count. If true, the on-target will always be first",
         action="store_true",
     )
     process_parser.add_argument(
-        "--allow_guide_match_to_other_region_loc",
-        help="If true, guides can match to regions even if the guide chr:start is not in that region (e.g. if the guide sequence is found in that region). If false/unset, guides can only match to regions matching the guide chr:start position. This flag should be set if the genome for guide design was not the same as the analysis genome.",
+        "--allow_target_match_to_other_region_loc",
+        help="If true, targets can match to regions even if the target chr:start is not in that region (e.g. if the target sequence is found in that region). If false/unset, targets can only match to regions matching the target chr:start position. This flag should be set if the genome for guide design was not the same as the analysis genome.",
         action="store_true",
     )
     process_parser.add_argument(
@@ -3083,6 +3480,12 @@ if __name__ == "__main__":
     process_parser.add_argument(
         "--plot_group_order",
         help="Order of the groups to plot (if None, the groups will be sorted alphabetically)",
+        default=None,
+        type=str,
+    )
+    process_parser.add_argument(
+        "--sig_method_parameters",
+        help="Parameters for the significance method in the form of:\n\tnone\n\thard_cutoff,cutoff\n\tneg_binomial,group1,group2,alpha\n\tt_test,group1,group2,alpha\n\tmean_diff,group1,group2,cutoff",
         default=None,
         type=str,
     )
@@ -3147,6 +3550,12 @@ if __name__ == "__main__":
     plot_parser.add_argument(
         "--plot_group_order",
         help="Order of the groups to plot (if None, the groups will be sorted alphabetically)",
+        default=None,
+        type=str,
+    )
+    plot_parser.add_argument(
+        "--sig_method_parameters",
+        help="Parameters for the significance method in the form of:\n\tnone\n\thard_cutoff,cutoff\n\tneg_binomial,group1,group2,alpha\n\tt_test,group1,group2,alpha\n\tmean_diff,group1,group2,cutoff",
         default=None,
         type=str,
     )
@@ -3283,15 +3692,11 @@ if __name__ == "__main__":
             raise Exception('Cannot find genome fasta file at ' + args.genome_file)
 
         os.makedirs(output_folder, exist_ok=True)
-        make_guide_info_file(args.guide_seq, args.guide_name, args.pam, genome_file, args.max_mismatches, args.max_rna_bulges, args.max_dna_bulges, output_folder, args.file_prefix)
+        make_target_info_file(args.guide_seq, args.guide_name, args.pam, genome_file, args.max_mismatches, args.max_rna_bulges, args.max_dna_bulges, output_folder, args.file_prefix)
     
     elif args.subcommand == "Replot":
         if not os.path.isfile(args.reordered_stats_file):
-            raise Exception(
-                'Reordered statistics file is not found at "'
-                + args.reordered_stats_file
-                + '". Use an aggregated_stats_all.txt file from a previous run as a template.'
-            )
+            raise Exception('Reordered statistics file is not found at "' + args.reordered_stats_file + '". Use an aggregated_stats_all.txt file from a previous run as a template.')
 
         if not os.path.isfile(args.reordered_sample_file):
             raise Exception("Sample file not found at " + args.sample_file + "\n" + \
@@ -3318,6 +3723,9 @@ if __name__ == "__main__":
                     dot_plot_ylims[1] = float(dot_plot_ylim_vals[1])
             except Exception as e:
                 raise Exception("Could not parse dot plot ylims: " + str(e))
+        sig_method_parameters = None
+        if args.sig_method_parameters is not None:
+            sig_method_parameters = parse_sig_method_parameters(args.sig_method_parameters)
 
         replot(
             args.reordered_stats_file,
@@ -3332,15 +3740,20 @@ if __name__ == "__main__":
             dot_plot_ylims=dot_plot_ylims,
             heatmap_max_value=args.heatmap_max_value,
             heatmap_min_value=args.heatmap_min_value,
+            sig_method_parameters=sig_method_parameters,
         )
 
     elif args.subcommand == "Process":
         if not os.path.isfile(args.sample_file):
             raise Exception("Sample file not found at " + args.sample_file + "\n" + \
                             "Please provide a sample file with headers ['Name','fastq_r1','fastq_r2']")
+        # make sure sample file is in proper format
+        _ = parse_sample_file(args.sample_file)
 
-        if not os.path.isfile(args.guide_file):
-            raise Exception("Guide file not found at " + args.guide_file)
+        if not os.path.isfile(args.target_file):
+            raise Exception("Target file not found at " + args.target_file)
+        # make sure target file is in proper format
+        _ = parse_target_info(args.target_file)
 
         if args.gene_annotations is not None and not os.path.isfile(
             args.gene_annotations
@@ -3391,12 +3804,14 @@ if __name__ == "__main__":
                 if group not in list(pd.read_csv(args.sample_file, sep="\t")["group"].unique()):
                     raise Exception("In parsing group order (" + args.plot_group_order + ") group " + group + " not found in sample file")
 
-
+        sig_method_parameters = None
+        if args.sig_method_parameters is not None:
+            sig_method_parameters = parse_sig_method_parameters(args.sig_method_parameters)
 
         process_pools(
             args=args,
             sample_file=args.sample_file,
-            guide_file=args.guide_file,
+            target_file=args.target_file,
             genome_file=args.genome_file,
             output_folder=output_folder,
             gene_annotations=args.gene_annotations,
@@ -3407,19 +3822,20 @@ if __name__ == "__main__":
             crispresso_default_min_aln_score=args.crispresso_default_min_aln_score,
             crispresso_plot_window_size=args.crispresso_plot_window_size,
             allow_unplaced_chrs=args.allow_unplaced_chrs,
-            plot_only_complete_guides=args.plot_only_complete_guides,
+            plot_only_complete_targets=args.plot_only_complete_targets,
             min_amplicon_coverage=args.min_amplicon_coverage,
             sort_based_on_mismatch=args.sort_based_on_mismatch,
-            allow_guide_match_to_other_region_loc=args.allow_guide_match_to_other_region_loc,
+            allow_target_match_to_other_region_loc=args.allow_target_match_to_other_region_loc,
             top_percent_cutoff=args.top_percent_cutoff,
             min_amplicon_len=args.min_amplicon_len,
             fail_on_pooled_fail=args.fail_on_pooled_fail,
             plot_group_order=plot_group_order,
+            sig_method_parameters=sig_method_parameters,
         )
     else:
         raise Exception(
             'Please run with one of the following commands: \n' + 
-            '"MakeGuideFile" (to make a guide file from a given guide sequence)\n' +
+            '"MakeGuideFile" (to make a target file from a given guide sequence)\n' +
             '"Process" (to process initial analysis) \n' + 
             '"Replot" (to replot finished analysis)'
         )
