@@ -188,15 +188,9 @@ def process_pools(
         genome_file,
         output_folder=crispresso_output_folder,
         n_processors=n_processors,
-        crispresso_quantification_window_center=crispresso_quantification_window_center,
-        crispresso_quantification_window_size=crispresso_quantification_window_size,
-        crispresso_base_editor_output=crispresso_base_editor_output,
-        crispresso_default_min_aln_score=crispresso_default_min_aln_score,
-        crispresso_plot_window_size=crispresso_plot_window_size,
         allow_unplaced_chrs=allow_unplaced_chrs,
         top_percent_cutoff=top_percent_cutoff,
         min_amplicon_len=min_amplicon_len,
-        fail_on_pooled_fail=fail_on_pooled_fail,
     )
 
     crispresso_region_file, target_df, region_df = make_target_region_assignments(
@@ -847,16 +841,10 @@ def run_initial_demux(
     genome_file,
     output_folder="",
     n_processors=8,
-    crispresso_quantification_window_center=-3,
-    crispresso_quantification_window_size=1,
-    crispresso_base_editor_output=False,
-    crispresso_default_min_aln_score=20,
-    crispresso_plot_window_size=20,
     allow_unplaced_chrs=False,
     top_percent_cutoff=0.2,
     min_amplicon_len=50,
     suppress_output=True,
-    fail_on_pooled_fail=False,
 ):
     """
     Run CRISPResso on input reads to determine which regions are frequently aligned to
@@ -868,15 +856,10 @@ def run_initial_demux(
     - genome_file: path to the genome file
     - output_folder: path to the output folder where results should be written
     - n_processors: number of processors to use
-    - crispresso_quantification_window_center: the window to use for CRISPResso2 quantification. This will be used for CRISPResso2 subruns and corresponds to the parameter --quantification_window_center. If None, the default value of -3 will be used.
-    - crispresso_quantification_window_size: the window size to use for CRISPResso2 quantification. This will be used for CRISPResso2 subruns and corresponds to the parameter --quantification_window_size. If None, the default value of 1 will be used.
-    - crispresso_base_editor_output: whether to output base editor plots. If True, base editor plots will be output. If False, base editor plots will not be output.
-    - crispresso_default_min_aln_score: the minimum alignment score to use for CRISPResso2. This will be used for CRISPResso2 subruns and corresponds to the parameter --default_min_aln_score. If None, the default value of 20 will be used.
-    - crispresso_plot_window_size: the window size to use for CRISPResso2 plots. This will be used for CRISPResso2 subruns and corresponds to the parameter --plot_window_size. If None, the default value of 20 will be used.
     - allow_unplaced_chrs: whether to allow regions on bad chromosomes (chrUn, random, etc). If true, these regions will be included.
     - top_percent_cutoff: the top percent of aligned regions (by region read depth) to consider in finding non-overlapping regions. This is a float between 0 and 1. For example, if set to 0.2, the top 20% of regions (by read depth) will be considered.
     - min_amplicon_len: the minimum length of an amplicon to consider in finding non-overlapping regions. Amplicons shorter than this will be ignored.
-    - fail_on_pooled_fail: if true, fail if any pooled CRISPResso run fails. Otherwise, continue even if sub-CRISPResso commands fail.
+    - suppress_output: whether to suppress output from CRISPRessoPooled (default is True, which will suppress most output except for errors and warnings)
 
     returns:
     - merged_regions_file: file with df of merged regions with columns for: chr, start, end, read_count and seq)
@@ -894,10 +877,6 @@ def run_initial_demux(
     if suppress_output:
         suppress_output_string = " --verbosity 1 "
 
-    stop_on_fail_string = " --skip_failed "
-    if not fail_on_pooled_fail:
-        stop_on_fail_string = ""
-
     CRISPResso_output_folder = (
         output_folder + "CRISPRessoPooled_on_" + experiment_name + "_demux"
     )
@@ -907,14 +886,11 @@ def run_initial_demux(
         + " -r1 " + fastq_r1
         + r2_string
         + output_string
-        + " --quantification_window_center " + str(crispresso_quantification_window_center) 
-        + " --quantification_window_size " + str(crispresso_quantification_window_size)
-        + " --default_min_aln_score " + str(crispresso_default_min_aln_score)
+        + " --min_reads_to_use_region 10000000 " # this line prevents CRISPRessoPooled from running CRISPResso on the individual samples, which is not needed for region identification
         + " -n " + experiment_name + "_demux -p " + str(n_processors)
         + " --no_rerun --keep_intermediate --suppress_plots"
-        + " --plot_window_size " + str(crispresso_plot_window_size)
+        + " --skip_failed " # skip failed in thie initial demultiplexing step because we just want the region list
         + suppress_output_string
-        + stop_on_fail_string
     )
 
     crispresso_run_is_complete = False
@@ -937,7 +913,7 @@ def run_initial_demux(
     if not crispresso_run_is_complete:
         info("Aligning reads to the genome to find amplicon locations")
         debug("Running command " + str(command))
-        subprocess.run(command, shell=True, check=True)
+        subprocess.run(command, shell=True, check=False) #check is False because sometimes CRISPRessoPooled fails on some samples - but we just need the regions file
         info('Finished running alignment to find amplicon locations', {'percent_complete': 40})
 
     merged_regions_file = merge_locations(
@@ -3567,13 +3543,13 @@ if __name__ == "__main__":
     )
     plot_parser.add_argument(
         "--heatmap_max_value",
-        help="Maximum value for the heatmap color scale, where a value of 1 sets the max value color to 1% (if None, the maximum value will be determined automatically)",
+        help="Maximum value for the heatmap color scale, where a value of 1 sets the max value color to 1%% (if None, the maximum value will be determined automatically)",
         default=None,
         type=float,
     )
     plot_parser.add_argument(
         "--heatmap_min_value",
-        help="Minimum value for the heatmap color scale, where a value of 1 sets the min value color to 1% (if None, the minimum value will be determined automatically)",
+        help="Minimum value for the heatmap color scale, where a value of 1 sets the min value color to 1%% (if None, the minimum value will be determined automatically)",
         default=None,
         type=float,
     )
