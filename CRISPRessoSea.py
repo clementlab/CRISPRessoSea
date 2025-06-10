@@ -1639,6 +1639,15 @@ def analyze_run(output_name, crispresso_folder, target_df, region_df):
     pooled_results = pooled_info["results"]["good_region_folders"] # dict of result_name to CRISPResso folder
 
     if len(pooled_results) == 0:
+        if 'log_filename' in pooled_info['running_info'] and os.path.exists(crispresso_folder + "/" + pooled_info['running_info']['log_filename']):
+            with open(crispresso_folder + "/" + pooled_info['running_info']['log_filename'], 'r') as log_file:
+                #get tail of log content
+                log_content = log_file.read()
+                tail_content = "\n".join(log_content.splitlines()[-20:])  # get last 20 lines
+
+            raise Exception(
+                f"No results found in CRISPResso output folder {crispresso_folder}. Check the output folder for errors.\nLog content:\n...\n{tail_content}"
+            )
         raise Exception(
             f"No results found in CRISPResso output folder {crispresso_folder}. Check the output folder for errors."
         )
@@ -1650,12 +1659,7 @@ def analyze_run(output_name, crispresso_folder, target_df, region_df):
     target_pooled_results_lookup = {}
     for pooled_result_name in pooled_results.keys():
         folder_name = pooled_results[pooled_result_name]
-        run_info = CRISPRessoShared.load_crispresso_info(
-            crispresso_info_file_path=crispresso_folder
-            + "/"
-            + folder_name
-            + "/CRISPResso2_info.json"
-        )
+        run_info = CRISPRessoShared.load_crispresso_info(crispresso_info_file_path=crispresso_folder + "/" + folder_name + "/CRISPResso2_info.json")
         region_info = region_df.loc[region_df["region_id"] == pooled_result_name]
         target_id = region_info["target_id"].values[0]
 
@@ -1664,9 +1668,7 @@ def analyze_run(output_name, crispresso_folder, target_df, region_df):
     #iterate through targets in order and aggregate results
     target_data = []
     with open(target_summary_file, "w") as fout:
-        fout.write(
-            "target_id\ttarget_label\tpooled_result_name\thighest_a_g_pct\thighest_c_t_pct\thighest_indel_pct\ttot_reads\n"
-        )
+        fout.write("target_id\ttarget_label\tpooled_result_name\thighest_a_g_pct\thighest_c_t_pct\thighest_indel_pct\ttot_reads\n")
         for idx, row in target_df.iterrows():
             target_id = row["target_id"]
             target_name = row["target_name"]
@@ -1679,12 +1681,7 @@ def analyze_run(output_name, crispresso_folder, target_df, region_df):
                 pooled_result_name = target_pooled_results_lookup[target_id]
                 folder_name = pooled_results[pooled_result_name]
 
-                run_info = CRISPRessoShared.load_crispresso_info(
-                    crispresso_info_file_path=crispresso_folder
-                    + "/"
-                    + folder_name
-                    + "/CRISPResso2_info.json"
-                )
+                run_info = CRISPRessoShared.load_crispresso_info(crispresso_info_file_path=crispresso_folder + "/" + folder_name + "/CRISPResso2_info.json")
                 region_info = region_df.loc[region_df["region_id"] == pooled_result_name]
 
                 target_info = target_df.loc[target_df["target_id"] == target_id]
