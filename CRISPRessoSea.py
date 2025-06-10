@@ -167,6 +167,9 @@ def process_pools(
             raise Exception(
                 "Fastq R2 file for sample " + sample_name + " not found at " + sample_r2
             )
+        if sample_r2 is not None and sample_r1 == sample_r2:
+            raise Exception("Fastq R1 and R2 files for sample " + sample_name + " are the same: " + sample_r1)   
+
 
     summary_output_folder = os.path.join(output_folder, "summary/")
     if not os.path.exists(summary_output_folder):
