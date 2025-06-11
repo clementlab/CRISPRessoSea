@@ -2138,7 +2138,7 @@ def create_plots(
                     ].append(file_name)
                     crispresso2_info["results"]["general_plots"]["summary_plot_titles"][
                         file_name
-                    ] = (col_title + " Percent Edited")
+                    ] = (col_title)
                     crispresso2_info["results"]["general_plots"]["summary_plot_labels"][
                         file_name
                     ] = ""
