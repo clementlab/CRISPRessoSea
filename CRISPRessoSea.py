@@ -217,10 +217,10 @@ def process_pools(
     current_pct_complete = start_pct_complete
     step_pct_complete = (end_pct_complete - start_pct_complete) / len(sample_df)
 
-    for sample_idx, sample_row in sample_df.iterrows():
+    for sample_row_num, (sample_idx, sample_row) in enumerate(sample_df.iterrows()):
         sample_name = sample_row["Name"]
         current_pct_complete += step_pct_complete
-        info('Processing sample ' + sample_name, {'percent_complete': current_pct_complete})
+        info(f'Processing sample {sample_row_num + 1}/{len(sample_df)}: {sample_name}', {'percent_complete': current_pct_complete})
         sample_r1 = sample_row["fastq_r1"]
         sample_r2 = None
         if "fastq_r2" in sample_row:
@@ -1579,7 +1579,6 @@ def run_crispresso_with_assigned_regions(
                 info("CRISPResso output already exists for sample " + experiment_name + ", skipping CRISPResso run")
         except:
             raise Exception("failed!")
-            pass
 
     if not crispresso_run_is_complete:
         info("Aligning reads to the genome to find amplicon locations")
