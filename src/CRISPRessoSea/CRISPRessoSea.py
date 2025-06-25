@@ -3810,12 +3810,13 @@ def main():
             sig_method_parameters=sig_method_parameters,
         )
     else:
-        raise Exception(
+        error (
             'Please run with one of the following commands: \n' + 
             '"MakeGuideFile" (to make a target file from a given guide sequence)\n' +
             '"Process" (to process initial analysis) \n' + 
             '"Replot" (to replot finished analysis)'
         )
+        sys.exit(1)
 
 if __name__ == "__main__":
     try:
