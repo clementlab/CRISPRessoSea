@@ -8,8 +8,9 @@ conda config --add channels defaults
 conda config --add channels bioconda
 conda config --add channels conda-forge
 
-conda create -n CRISPRessoSea crispresso2 # Create CRISPRessoSea conda environment
-pip install  git+https://github.com/clementlab/CRISPRessoSea.git
+conda create -y -n CRISPRessoSea crispresso2 # Create CRISPRessoSea conda environment
+conda activate CRISPRessoSea
+pip install git+https://github.com/clementlab/CRISPRessoSea.git
 ```
 
 ## Running CRISPRessoSea

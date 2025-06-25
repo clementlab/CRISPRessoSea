@@ -3818,4 +3818,13 @@ def main():
         )
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        error('Error: ' + str(e))
+        sys.exit(1)
+    except KeyboardInterrupt:
+        error('Process interrupted by user')
+        sys.exit(1)
+    else:
+        info('CRISPRessoSea completed successfully')
