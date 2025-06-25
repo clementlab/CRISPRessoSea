@@ -3331,8 +3331,10 @@ def make_target_info_file(guide_seq_str, guide_name_str, guide_pam, genome_file,
 
     info('Wrote guide info to ' + guide_output_file, {'percent_complete': 100})
 
-# main entry point
-if __name__ == "__main__":
+def main():
+    """
+    Main function to handle command line arguments and call the appropriate functions
+    """
     parser = argparse.ArgumentParser(
         description="Process multiple pooled sequencing runs",
     )
@@ -3814,3 +3816,6 @@ if __name__ == "__main__":
             '"Process" (to process initial analysis) \n' + 
             '"Replot" (to replot finished analysis)'
         )
+
+if __name__ == "__main__":
+    main()

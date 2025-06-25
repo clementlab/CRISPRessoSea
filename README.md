@@ -1,5 +1,20 @@
 # CRISPRessoSea
-CRISPRessoSea is a tool for processing genome editing from multiple pooled amplicon sequencing experiments to characterizing editing at on- and off-targets across experimental conditions. The tool accepts raw sequencing files as input, performs analysis at each site in each sample, performs statistical analysis of editing, and produces plots and reports detailing editing rates. CRISPRessoSea operates in three primary running modes to streamline the preparation, processing, and replotting of large-scale pooled sequencing experiments to measure and compare CRISPR genome editing.
+CRISPRessoSea is a tool for processing genome editing from multiple pooled amplicon sequencing experiments to characterizing editing at on- and off-targets across experimental conditions. The tool accepts raw sequencing files as input, performs analysis at each site in each sample, performs statistical analysis of editing, and produces plots and reports detailing editing rates. 
+
+## Installation
+CRISPRessoSea can be installed into an environment that contains CRISPResso2 and its dependencies.
+```
+conda config --add channels defaults
+conda config --add channels bioconda
+conda config --add channels conda-forge
+
+conda create -n CRISPRessoSea crispresso2 # Create CRISPRessoSea conda environment
+pip install  git+https://github.com/clementlab/CRISPRessoSea.git
+```
+
+## Running CRISPRessoSea
+
+CRISPRessoSea operates in three primary running modes to streamline the preparation, processing, and replotting of large-scale pooled sequencing experiments to measure and compare CRISPR genome editing.
 
 ### MakeGuideFile
 `MakeGuideFile`: This mode enables users to generate a comprehensive target file that includes both on- and off-target sites for one or more guide RNA sequences. Off-target sites are computationally predicted using [Cas-OFFinder](https://github.com/snugel/cas-offinder), which reports genomic coordinates, sequences, and mismatch counts for each potential target. This functionality is especially useful for designing pooled experiments to profile editing activity at predicted off-target sites, or for preparing analyses when the off-target sequences or locations are not already known. The output of this mode is a standardized target file compatible with CRISPRessoSea’s Process mode.

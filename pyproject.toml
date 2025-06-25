@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "CRISPRessoSea"
+version = "0.1.3"
+description = "CRISPRessoSea: pooled CRISPR analysis pipeline"
+authors = [
+    { name = "Kendell Clement", email = "k.clement@utah.edu" }
+]
+readme = "README.md"
+requires-python = ">=3.7"
+license = { text = "MIT" }
+dependencies = [
+    "numpy",
+    "pandas",
+    "matplotlib",
+    "seaborn",
+    "scipy",
+    "statsmodels",
+    "jinja2",
+    "crispresso2"
+]
+
+[project.urls]
+Homepage = "https://github.com/clementlab/CRISPRessoSea"
+
+[project.scripts]
+CRISPRessoSea = "CRISPRessoSea.CRISPRessoSea:main"
