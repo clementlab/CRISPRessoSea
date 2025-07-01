@@ -12,7 +12,6 @@ conda config --add channels conda-forge
 
 conda create -y -n CRISPRessoSea bioconda::crispresso2 bioconda::cas-offinder # Create CRISPRessoSea conda environment
 conda activate CRISPRessoSea
-conda install -y scipy<=1.15.3' ## This temporarily repairs a breaking change in scipy/statsmodels https://github.com/statsmodels/statsmodels/issues/9542
 pip install git+https://github.com/clementlab/CRISPRessoSea.git
 ```
 
