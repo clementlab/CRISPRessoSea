@@ -35,7 +35,7 @@ CRISPRessoSea operates in three primary running modes to streamline the preparat
 ## Tutorial
 
 ### Download tutorial dataset
-Download the tutorial dataset and change into that directory by running:
+Download the tutorial dataset, untar it, and change into that directory by running:
 ```
 wget https://github.com/clementlab/CRISPRessoSea/raw/refs/heads/main/demo/small_demo.tar.gz
 tar -xzf small_demo.tar.gz
