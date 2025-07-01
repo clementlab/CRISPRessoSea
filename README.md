@@ -2,13 +2,13 @@
 CRISPRessoSea is a tool for processing genome editing from multiple pooled amplicon sequencing experiments to characterizing editing at on- and off-targets across experimental conditions. The tool accepts raw sequencing files as input, performs analysis at each site in each sample, performs statistical analysis of editing, and produces plots and reports detailing editing rates. 
 
 ## Installation
-CRISPRessoSea can be installed into an environment that contains CRISPResso2 and its dependencies.
+CRISPRessoSea can be installed into an environment that contains CRISPResso2 and its dependencies. cas-offinder is optional but required for creating a guide info file from scratch.
 ```
 conda config --add channels defaults
 conda config --add channels bioconda
 conda config --add channels conda-forge
 
-conda create -y -n CRISPRessoSea crispresso2 # Create CRISPRessoSea conda environment
+conda create -y -n CRISPRessoSea bioconda::crispresso2 bioconda::cas-offinder # Create CRISPRessoSea conda environment
 conda activate CRISPRessoSea
 pip install git+https://github.com/clementlab/CRISPRessoSea.git
 ```
@@ -30,6 +30,42 @@ CRISPRessoSea operates in three primary running modes to streamline the preparat
  `Replot`: This program will replot data from a finished analysis performed using `Process`. This avoids reprocessing or rerunning any analyses but allows users to reorder or subset guides to be plotted. This program accepts as input:
  - A modified file derived from an 'aggregated_stats_all.txt' output from a completed `Process` run.
 
+## Tutorial
+
+### Download tutorial dataset
+Download the tutorial dataset and change into that directory by running:
+```
+wget TODO
+cd CRISPRessoSea_demo
+```
+This tutorial includes a subset of data from [Cicera et al. 2020](https://www.nature.com/articles/s41587-020-0555-7) investigating the CTLA4_Site9 guide with sequence GGACTGAGGGCCATGGACACNGG. The complete dataset can be found at https://www.ncbi.nlm.nih.gov/bioproject/PRJNA625995
+
+For ease of use, I've created a super-small genome that includes the genomic sequence of only the on-target and three off-by-2 off-targets.
+
+### MakeGuideFile
+ You can create a guide info file (e.g. for designing a pooled experiment to profile off-targets) by running:
+
+```
+CRISPRessoSea MakeGuideFile --guide_seq GGACTGAGGGCCATGGACAC --pam NGG --guide_name CTLA4_site9 --max_mismatches 2 --genome_file demo_genome.fa
+```
+Note that this requres [Cas-offinder](https://github.com/snugel/cas-offinder) for enumerating off-target sites.
+
+### Process
+If you ran MakeGuideFile, you can now use the identified offtargets to run in Process mode using the command:
+```
+CRISPRessoSea Process --sample_file samples.demo.txt --target_file CRISPRessoSea_MakeGuideFileOutput/CRISPRessoSea.guide_info.txt --genome_file test_genome.fa
+```
+
+If you didn't run that step, you can use the guide_info file in the demo dataset:
+```
+CRISPRessoSea Process --sample_file samples.demo.txt --target_file guides.demo.txt --genome_file test_genome.fa
+```
+
+### Replot
+If you'd like to change the order and name of guides, or add or change statistical tests, you can replot using the command:
+```
+CRISPRessoSea Replot -o 04_replot.ipynb.output --reordered_stats_file 04_replot.ipynb.agg_stats.txt --reordered_sample_file 04_replot.ipynb.samples.txt --sig_method_parameters t_test,Control,Treated,0.05 
+```
 
 ## Complete command description:
 ### MakeGuideFile
@@ -62,10 +98,12 @@ options:
 
 ### Process
 ```
-usage: CRISPRessoSea.py Process [-h] [-o OUTPUT_FOLDER] -t TARGET_FILE -s SAMPLE_FILE [--gene_annotations GENE_ANNOTATIONS] -x GENOME_FILE [-p N_PROCESSES] [--crispresso_quantification_window_center CRISPRESSO_QUANTIFICATION_WINDOW_CENTER]
-                                [--crispresso_quantification_window_size CRISPRESSO_QUANTIFICATION_WINDOW_SIZE] [--crispresso_base_editor_output] [--crispresso_default_min_aln_score CRISPRESSO_DEFAULT_MIN_ALN_SCORE] [--crispresso_plot_window_size CRISPRESSO_PLOT_WINDOW_SIZE]
-                                [--allow_unplaced_chrs] [--plot_only_complete_targets] [--min_amplicon_coverage MIN_AMPLICON_COVERAGE] [--sort_based_on_mismatch] [--allow_target_match_to_other_region_loc] [--top_percent_cutoff TOP_PERCENT_CUTOFF]
-                                [--min_amplicon_len MIN_AMPLICON_LEN] [--fail_on_pooled_fail] [--plot_group_order PLOT_GROUP_ORDER] [--sig_method_parameters SIG_METHOD_PARAMETERS] [-v VERBOSITY] [--debug]
+usage: CRISPRessoSea.py Process [-h] [-o OUTPUT_FOLDER] -t TARGET_FILE -s SAMPLE_FILE [--gene_annotations GENE_ANNOTATIONS] -x GENOME_FILE [-r REGION_FILE] [-p N_PROCESSES]
+                                [--crispresso_quantification_window_center CRISPRESSO_QUANTIFICATION_WINDOW_CENTER] [--crispresso_quantification_window_size CRISPRESSO_QUANTIFICATION_WINDOW_SIZE]
+                                [--crispresso_base_editor_output] [--crispresso_default_min_aln_score CRISPRESSO_DEFAULT_MIN_ALN_SCORE] [--crispresso_plot_window_size CRISPRESSO_PLOT_WINDOW_SIZE] [--allow_unplaced_chrs]
+                                [--plot_only_complete_targets] [--min_amplicon_coverage MIN_AMPLICON_COVERAGE] [--sort_based_on_mismatch] [--allow_target_match_to_other_region_loc]
+                                [--top_percent_cutoff TOP_PERCENT_CUTOFF] [--min_amplicon_len MIN_AMPLICON_LEN] [--fail_on_pooled_fail] [--plot_group_order PLOT_GROUP_ORDER]
+                                [--sig_method_parameters SIG_METHOD_PARAMETERS] [-v VERBOSITY] [--debug]
 
 options:
   -h, --help            show this help message and exit
@@ -79,22 +117,25 @@ options:
                         Gene annotations file - a tab-separated .bed file with gene annotations with columns "chr" or "chrom", "start" or "txstart", and "end" or "txend" as well as "name" (default: None)
   -x GENOME_FILE, --genome_file GENOME_FILE
                         Bowtie2-indexed genome file - files ending in and .bt2 must be present in the same folder. (default: None)
+  -r REGION_FILE, --region_file REGION_FILE
+                        Region file - a tab-separated .bed file with regions to analyze with columns for 'chr', 'start', and 'end'. If not provided, regions will be inferred by read alignment. (default: None)
   -p N_PROCESSES, --n_processes N_PROCESSES
                         Number of processes to use. Set to "max" to use all available processors. (default: 8)
   --crispresso_quantification_window_center CRISPRESSO_QUANTIFICATION_WINDOW_CENTER
-                        Center of quantification window to use within respect to the 3' end of the provided sgRNA sequence. Remember that the sgRNA sequence must be entered without the PAM. For cleaving nucleases, this is the predicted cleavage position. The default is -3 and is
-                        suitable for the Cas9 system. For alternate nucleases, other cleavage offsets may be appropriate, for example, if using Cpf1 this parameter would be set to 1. For base editors, this could be set to -17 to only include mutations near the 5' end of the sgRNA.
-                        (default: -3)
+                        Center of quantification window to use within respect to the 3' end of the provided sgRNA sequence. Remember that the sgRNA sequence must be entered without the PAM. For cleaving nucleases, this
+                        is the predicted cleavage position. The default is -3 and is suitable for the Cas9 system. For alternate nucleases, other cleavage offsets may be appropriate, for example, if using Cpf1 this
+                        parameter would be set to 1. For base editors, this could be set to -17 to only include mutations near the 5' end of the sgRNA. (default: -3)
   --crispresso_quantification_window_size CRISPRESSO_QUANTIFICATION_WINDOW_SIZE
-                        Size (in bp) of the quantification window extending from the position specified by the '--cleavage_offset' or '--quantification_window_center' parameter in relation to the provided guide RNA sequence(s) (--sgRNA). Mutations within this number of bp from the
-                        quantification window center are used in classifying reads as modified or unmodified. A value of 0 disables this window and indels in the entire amplicon are considered. Default is 1, 1bp on each side of the cleavage position for a total length of 2bp.
-                        (default: 1)
+                        Size (in bp) of the quantification window extending from the position specified by the '--cleavage_offset' or '--quantification_window_center' parameter in relation to the provided guide RNA
+                        sequence(s) (--sgRNA). Mutations within this number of bp from the quantification window center are used in classifying reads as modified or unmodified. A value of 0 disables this window and
+                        indels in the entire amplicon are considered. Default is 1, 1bp on each side of the cleavage position for a total length of 2bp. (default: 1)
   --crispresso_base_editor_output
                         Outputs plots and tables to aid in analysis of base editor studies. (default: False)
   --crispresso_default_min_aln_score CRISPRESSO_DEFAULT_MIN_ALN_SCORE
                         Default minimum homology score for a read to align to a reference amplicon. (default: 60)
   --crispresso_plot_window_size CRISPRESSO_PLOT_WINDOW_SIZE
-                        Defines the size of the window extending from the quantification window center to plot. Nucleotides within plot_window_size of the quantification_window_center for each guide are plotted. (default: 20)
+                        Defines the size of the window extending from the quantification window center to plot. Nucleotides within plot_window_size of the quantification_window_center for each guide are plotted.
+                        (default: 20)
   --allow_unplaced_chrs
                         Allow regions on unplaced chromosomes (chrUn, random, etc). By default, regions on these chromosomes are excluded. If set, regions on these chromosomes will be included. (default: False)
   --plot_only_complete_targets
@@ -104,11 +145,11 @@ options:
   --sort_based_on_mismatch
                         Sort targets based on mismatch count. If true, the on-target will always be first (default: False)
   --allow_target_match_to_other_region_loc
-                        If true, targets can match to regions even if the target chr:start is not in that region (e.g. if the target sequence is found in that region). If false/unset, targets can only match to regions matching the target chr:start position. This flag should be set
-                        if the genome for guide design was not the same as the analysis genome. (default: False)
+                        If true, targets can match to regions even if the target chr:start is not in that region (e.g. if the target sequence is found in that region). If false/unset, targets can only match to regions
+                        matching the target chr:start position. This flag should be set if the genome for guide design was not the same as the analysis genome. (default: False)
   --top_percent_cutoff TOP_PERCENT_CUTOFF
-                        The top percent of aligned regions (by region read depth) to consider in finding non-overlapping regions during demultiplexing. This is a float between 0 and 1. For example, if set to 0.2, the top 20% of regions (by read depth) will be considered. (default:
-                        0.2)
+                        The top percent of aligned regions (by region read depth) to consider in finding non-overlapping regions during demultiplexing. This is a float between 0 and 1. For example, if set to 0.2, the top
+                        20% of regions (by read depth) will be considered. (default: 0.2)
   --min_amplicon_len MIN_AMPLICON_LEN
                         The minimum length of an amplicon to consider in finding non-overlapping regions during demultiplexing. Amplicons shorter than this will be ignored. (default: 50)
   --fail_on_pooled_fail
@@ -124,8 +165,9 @@ options:
 
 ### Replot
 ```
-usage: CRISPRessoSea.py Replot [-h] [-o OUTPUT_FOLDER] [-p FILE_PREFIX] -f REORDERED_STATS_FILE -s REORDERED_SAMPLE_FILE [-n NAME_COLUMN] [--fig_width FIG_WIDTH] [--fig_height FIG_HEIGHT] [--seq_plot_ratio SEQ_PLOT_RATIO] [--plot_group_order PLOT_GROUP_ORDER]
-                               [--sig_method_parameters SIG_METHOD_PARAMETERS] [--dot_plot_ylims DOT_PLOT_YLIMS] [--heatmap_max_value HEATMAP_MAX_VALUE] [--heatmap_min_value HEATMAP_MIN_VALUE] [-v VERBOSITY] [--debug]
+usage: CRISPRessoSea.py Replot [-h] [-o OUTPUT_FOLDER] [-p FILE_PREFIX] -f REORDERED_STATS_FILE -s REORDERED_SAMPLE_FILE [--fig_width FIG_WIDTH] [--fig_height FIG_HEIGHT] [--seq_plot_ratio SEQ_PLOT_RATIO]
+                               [--plot_group_order PLOT_GROUP_ORDER] [--sig_method_parameters SIG_METHOD_PARAMETERS] [--dot_plot_ylims DOT_PLOT_YLIMS] [--heatmap_max_value HEATMAP_MAX_VALUE]
+                               [--heatmap_min_value HEATMAP_MIN_VALUE] [-v VERBOSITY] [--debug]
 
 options:
   -h, --help            show this help message and exit
@@ -137,8 +179,6 @@ options:
                         Reordered statistics file - made by reordering rows from aggregated_stats_all.txt (default: None)
   -s REORDERED_SAMPLE_FILE, --reordered_sample_file REORDERED_SAMPLE_FILE
                         Reordered_sample_file - path to the sample file with headers: Name, group, fastq_r1, fastq_r2 (group is always optional, fastq_r2 is optional for single-end reads) (default: None)
-  -n NAME_COLUMN, --name_column NAME_COLUMN
-                        Column name to set as the displayed name for each sample in the plot (default: None)
   --fig_width FIG_WIDTH
                         Width of the figure (default: 24)
   --fig_height FIG_HEIGHT

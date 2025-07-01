@@ -11,6 +11,7 @@ import subprocess
 import sys
 import scipy.stats as sp
 import statsmodels.api as sm
+import traceback
 
 
 from CRISPResso2 import CRISPResso2Align, CRISPRessoMultiProcessing, CRISPRessoShared
@@ -47,6 +48,7 @@ def process_pools(
     target_file,
     genome_file,
     output_folder,
+    region_file=None,
     gene_annotations=None,
     n_processors=8,
     crispresso_quantification_window_center=-3,
@@ -73,6 +75,7 @@ def process_pools(
     - target_file: path to the target file with headers: Guide, Sequence, PAM, #MM, Locus (may include other columns)
     - genome_file: path to the genome file (not including the trailing .fa)
     - output_folder: path to the output folder to produce data
+    - region_file: path to region file with columns 'chr','start','end'. If not provided, regions wil be inferred from the alignment of the first sample.
     - gene_annotations: the path to the gene annotations file. This function expects a column for:
         chromosome ('chrom' or 'chr'),
         start ('txStart','start', or 'Start'),
@@ -184,17 +187,36 @@ def process_pools(
     failed_samples = {}
     display_names = {}
 
-    merged_region_info_file = run_initial_demux(
-        first_sample_name,
-        first_sample_r1,
-        first_sample_r2,
-        genome_file,
-        output_folder=crispresso_output_folder,
-        n_processors=n_processors,
-        allow_unplaced_chrs=allow_unplaced_chrs,
-        top_percent_cutoff=top_percent_cutoff,
-        min_amplicon_len=min_amplicon_len,
-    )
+    if region_file is not None:
+        region_file_df = pd.read_csv(region_file, sep="\t")
+        merged_region_info_file = output_folder + "/region_info.txt"
+
+        with open(merged_region_info_file, "w") as fout:
+            fout.write('chr\tstart\tend\tregion_count\tseq\n')
+            for region_row in region_file_df.iterrows():
+                region_chr = region_row['chr']
+                region_start = region_row['start']
+                if 'start' in str(region_start).lower():
+                    continue # skip if we got a header row
+                region_end = region_row['end']
+                region_seq_output = subprocess.check_output(
+                    f"samtools faidx {genome_file}.fa {region_chr}:{region_start}-{region_end-1}", shell=True,
+                ).decode(sys.stdout.encoding)
+                region_seq = "".join(region_seq_output.split("\n")[1:])
+                region_count = 1 #set the same for all regions. If we were guessing region starts/stops, we would preference regions with higher read counts, but here, the user is providing regions.
+                fout.write(f"{region_chr}\t{region_start}\t{region_end}\t{region_count}\t{region_seq}\n")
+    else:
+        merged_region_info_file = run_initial_demux(
+            first_sample_name,
+            first_sample_r1,
+            first_sample_r2,
+            genome_file,
+            output_folder=crispresso_output_folder,
+            n_processors=n_processors,
+            allow_unplaced_chrs=allow_unplaced_chrs,
+            top_percent_cutoff=top_percent_cutoff,
+            min_amplicon_len=min_amplicon_len,
+        )
 
     crispresso_region_file, target_df, region_df = make_target_region_assignments(
         merged_region_info_file,
@@ -685,7 +707,6 @@ def merge_locations(
     allow_unplaced_chrs=False,
     top_percent_cutoff = 0.2,
     min_amplicon_len=50,
-    debug=False,
 ):
     """
     Merge locations from a CRISPRessoPooled run to get a list of non-overlapping regions that could represent the original amplicons
@@ -706,7 +727,7 @@ def merge_locations(
     if os.path.isfile(good_region_file):
         info('Using regions from ' + good_region_file, {'percent_complete': 20})
         return good_region_file
-    logger.debug("Couldn't find completed regions file at " + good_region_file + ". Generating now.", {'percent_complete': 10})
+    debug("Couldn't find completed regions file at " + good_region_file + ". Generating now.", {'percent_complete': 10})
 
     #otherwise process the read counts for each region
     genome_read_counts_file = os.path.join(
@@ -717,7 +738,7 @@ def merge_locations(
             "Genome read counts file not found at " + genome_read_counts_file
         )
 
-    logger.debug('Reading regions from ' + genome_read_counts_file)
+    debug('Reading regions from ' + genome_read_counts_file)
 
     region_info = {}
     good_nonoverlapping_regions = []
@@ -744,15 +765,7 @@ def merge_locations(
         region_count = region_row["number of reads"]
         region_name = "_".join([region_chr, str(region_start), str(region_end)])
         region_seq_output = subprocess.check_output(
-            "%s faidx %s %s:%d-%d"
-            % (
-                "samtools",
-                genome_file + ".fa",
-                region_chr,
-                region_start,
-                region_end - 1,
-            ),
-            shell=True,
+            f"samtools faidx {genome_file}.fa {region_chr}:{region_start}-{region_end-1}", shell=True,
         ).decode(sys.stdout.encoding)
         region_seq = "".join(region_seq_output.split("\n")[1:])
 
@@ -811,9 +824,8 @@ def merge_locations(
     total_region_count = region_df.shape[0]
     kept_region_count = len(good_nonoverlapping_regions)
     info("Kept " + str(kept_region_count) + "/" + str(total_region_count) + " regions", {'percent_complete': 20})
-    if debug:
-        for region in good_nonoverlapping_regions:
-            logger.debug(region)
+    for region in good_nonoverlapping_regions:
+        debug(region)
     good_nonoverlapping_region_rows = []
     for region in good_nonoverlapping_regions:
         this_region_info = region_info[region]
@@ -920,7 +932,7 @@ def run_initial_demux(
         info('Finished running alignment to find amplicon locations', {'percent_complete': 40})
 
     merged_regions_file = merge_locations(
-        CRISPResso_output_folder, genome_file, allow_unplaced_chrs=allow_unplaced_chrs, top_percent_cutoff=top_percent_cutoff, min_amplicon_len=min_amplicon_len, debug=False
+        CRISPResso_output_folder, genome_file, allow_unplaced_chrs=allow_unplaced_chrs, top_percent_cutoff=top_percent_cutoff, min_amplicon_len=min_amplicon_len,
     )
 
     return merged_regions_file
@@ -1185,7 +1197,7 @@ def make_target_region_assignments(
     Assign guide targets to regions based on their sequences and positions
 
     params:
-    - merged_region_info_df: dataframe of merged regions with columns for: chr, start, end, read_count and seq
+    - merged_region_info_file: file with dataframe of merged regions with columns for: chr, start, end, read_count and seq
     - target_file: path to the user-provided target file
     - output_folder: path to the output file root
     - sort_based_on_mismatch: if true, targets are sorted based on mismatch count. If false, targets are presented in the order they are in the file
@@ -1316,7 +1328,7 @@ def make_target_region_assignments(
     target_df["matched_region_id"] = "NA"
     with open(out_file, "w") as fout:
         fout.write(
-            "target_id\ttarget_name\ttarget_seq\ttarget_seq_with_pam\ttarget_chr\ttarget_pos\tontarget_name\tontarget_seq\tmatched_region_count\tmatched_regions\tregion_chr\tregion_start\tregion_end\tregion_read_count\tregion_seq\n"
+            "target_id\ttarget_name\ttarget_seq\ttarget_seq_with_pam\ttarget_chr\ttarget_pos\tontarget_name\tontarget_seq\tmatched_region_count\tmatched_regions\tregion_chr\tregion_start\tregion_end\tregion_seq\n"
         )
         for target_idx, target_row in target_df.iterrows():
             target_id = target_row["target_id"]
@@ -1757,13 +1769,13 @@ def analyze_run(output_name, crispresso_folder, target_df, region_df):
                 fout.write("\t".join(str(x) for x in data_to_write) + "\n")
                 target_data.append(data_to_write)
 
-            #copy over CRISPResso plot 2b for this target
-            plot2b_file = (crispresso_folder + "/" + folder_name + "/" + run_info["results"]["refs"]["Reference"]["plot_2b_roots"][0] + ".pdf")
-            if not os.path.isfile(plot2b_file):
-                warn("WARNING: missing plot2b file for", pooled_result_name)
-                continue
-            destination_name = target_name + "." + pooled_result_name + ".plot2b.pdf"
-            os.popen("cp " + plot2b_file + " " + output_dir + "/" + destination_name)
+                #copy over CRISPResso plot 2b for this target
+                plot2b_file = (crispresso_folder + "/" + folder_name + "/" + run_info["results"]["refs"]["Reference"]["plot_2b_roots"][0] + ".pdf")
+                if not os.path.isfile(plot2b_file):
+                    warn("WARNING: missing plot2b file for", pooled_result_name)
+                    continue
+                destination_name = target_name + "." + pooled_result_name + ".plot2b.pdf"
+                os.popen("cp " + plot2b_file + " " + output_dir + "/" + destination_name)
 
     plot_heatmap(output_name)
     target_data_df = pd.DataFrame(
@@ -2332,7 +2344,6 @@ def parse_sig_method_parameters(sig_method_parameter_string, group_labels=None):
             raise ValueError(significance_error_string + "Alpha value must be a number.")
     elif parameter_els[0].lower() == "neg_binomial" or parameter_els[0].lower() == "nbinom" or parameter_els[0].lower() == "nb":
         sig_method_parameters['method'] = SigMethod.NEG_BINOMIAL
-        print('parameter_els', parameter_els)
         if len(parameter_els) < 4:
             raise ValueError(significance_error_string + "Negative Binomial method requires group_1, group_2, and alpha values.\n" + significance_info_string)
         if group_labels is None or parameter_els[1] not in group_labels or parameter_els[2] not in group_labels:
@@ -2774,7 +2785,7 @@ def plot_targets_and_heatmap(
     if len(cols_to_plot) == 0:
         raise Exception("No columns found in df_data with suffix " + col_to_plot + " in columns: " + str(list(df_data.columns)))
     df_to_plot = df_data[cols_to_plot]
-    df_to_plot.index = df_data['target_id']
+    df_to_plot.index = df_data['target_name']
     df_to_plot.columns = [col.replace("_" + col_to_plot, "") for col in cols_to_plot]
 
     #calculate total counts for negative binomial
@@ -2880,6 +2891,7 @@ def plot_targets_and_heatmap(
         # cbar_pad = 0.11
     else:
         cbar_pad = 0.03
+
     ax_heat = sns.heatmap(
         df_to_plot,
         annot=data_annot,
@@ -3063,7 +3075,6 @@ def replot(
     reordered_sample_file,
     output_folder=None,
     file_prefix=None,
-    name_column=None,
     fig_height=24,
     fig_width=24,
     seq_plot_ratio=1,
@@ -3087,7 +3098,6 @@ def replot(
     - reordered_sample_file: path to the sample file with headers: Name, group, fastq_r1, fastq_r2 (group is always optional, fastq_r2 is optional for single-end reads)
     - output_folder: the output folder for the output plots
     - file_prefix: the prefix for the output plots
-    - name_column: the column to use as the displayed name for each sample in the plot
     - fig_height: the height of the figure
     - fig_width: the width of the figure
     - seq_plot_ratio: the ratio of the width of the target sequence plot to the data plot (>1 means the seq plot is larger than the data plot)
@@ -3111,11 +3121,7 @@ def replot(
 
     reordered_stats_df = pd.read_csv(reordered_stats_file, sep="\t")
     target_plot_df = create_target_df_for_plotting(reordered_stats_df)
-
-    if name_column is not None:
-        if name_column not in sample_df.columns:
-            raise Exception(f"Column '{name_column}' not found in sample file. Available columns: {list(sample_df.columns)}")
-            
+    target_plot_df.index = reordered_stats_df["target_name"]
 
     info("Plotting for " + str(len(reordered_stats_df)) + " targets", {"percent_complete": 20})
 
@@ -3292,7 +3298,10 @@ def make_target_info_file(guide_seq_str, guide_name_str, guide_pam, genome_file,
                 mismatch_string = 'Mismatches: ' + str(mismatch_count) + ', Bulges: ' + line_els[1] + ' ' + str(bulge_count)
 
                 locus_string = chrom+":"+strand+loc
-                casoffinder_annotations.append([target_name, target_name + "_OB" + str(total_diff_count) + "_" + chrom + "_" + loc,
+                off_by_string = "_OB"+str(total_diff_count) + "_"
+                if str(total_diff_count) == "0":
+                    off_by_string = "_ON_"
+                casoffinder_annotations.append([target_name, target_name + off_by_string + chrom + "_" + loc,
                                                      offtarget_seq, offtarget_pam, str(total_diff_count), locus_string, mismatch_string])
     else: # parse old casoffinder output
         with open (casoffinder_output_file,'r') as cin:
@@ -3320,12 +3329,16 @@ def make_target_info_file(guide_seq_str, guide_name_str, guide_pam, genome_file,
                 mismatch_string = 'Mismatches: ' + str(mismatch_count)
 
                 locus_string = chrom+":"+strand+loc
-                casoffinder_annotations.append([target_name, target_name + "_OB" + str(total_diff_count) + "_" + chrom + "_" + loc,offtarget_seq, offtarget_pam, str(total_diff_count), locus_string, mismatch_string])
+                off_by_string = "_OB"+str(total_diff_count) + "_"
+                if str(total_diff_count) == "0":
+                    off_by_string = "_ON_"
+                casoffinder_annotations.append([target_name, target_name + off_by_string + chrom + "_" + loc,
+                                    offtarget_seq, offtarget_pam, str(total_diff_count), locus_string, mismatch_string])
 
     parsed_output = pd.DataFrame(casoffinder_annotations,columns=['Guide','Target','Sequence','PAM','#MM','Locus','Mismatch_info'])
     info('Found %d off-target sites using Cas-OFFinder'%(parsed_output.shape[0]), {'percent_complete': 80})
 
-    parsed_output = parsed_output.sort_values(by=['#MM'], ascending=True)
+    parsed_output.sort_values(by=['Guide','#MM'], ascending=True, inplace=True)
 
     parsed_output.to_csv(guide_output_file, sep="\t", index=False)
 
@@ -3373,6 +3386,12 @@ def main():
         "--genome_file",
         help="Bowtie2-indexed genome file - files ending in and .bt2 must be present in the same folder.",
         required=True,
+    )
+    process_parser.add_argument(
+        "-r",
+        "--region_file",
+        help="Region file - a tab-separated .bed file with regions to analyze with columns for 'chr', 'start', and 'end'. If not provided, regions will be inferred by read alignment.",
+        default=None,
     )
     process_parser.add_argument(
         "-p",
@@ -3505,12 +3524,6 @@ def main():
         "--reordered_sample_file",
         help="Reordered_sample_file - path to the sample file with headers: Name, group, fastq_r1, fastq_r2 (group is always optional, fastq_r2 is optional for single-end reads)",
         required=True,
-    )
-    plot_parser.add_argument(
-        "-n",
-        "--name_column",
-        help="Column name to set as the displayed name for each sample in the plot",
-        default=None,
     )
     plot_parser.add_argument(
         "--fig_width", help="Width of the figure", default=24, type=int
@@ -3679,12 +3692,18 @@ def main():
             raise Exception("Sample file not found at " + args.sample_file + "\n" + \
                             "Please provide a sample file with headers ['Name','fastq_r1','fastq_r2']")
         
+        sample_groups = None
+        sample_df = parse_sample_file(args.reordered_sample_file)
+        if 'group' in sample_df.columns:
+            # if the sample file has a group column, use it to determine the groups
+            sample_groups = list(sample_df["group"].unique())
+
         plot_group_order = None
         if args.plot_group_order is not None:
             plot_group_order = args.plot_group_order.split(",")
             for group in plot_group_order:
-                if group not in list(pd.read_csv(args.sample_file, sep="\t")["group"].unique()):
-                    raise Exception("In parsing group order (" + args.plot_group_order + ") group " + group + " not found in sample file")
+                if group not in sample_groups:
+                    raise Exception("In parsing group order (" + args.plot_group_order + ") group " + group + " not found in sample file (groups are " + str(sample_groups) + ")")
 
         dot_plot_ylims = [None, None]
         if args.dot_plot_ylims is not None:
@@ -3700,16 +3719,16 @@ def main():
                     dot_plot_ylims[1] = float(dot_plot_ylim_vals[1])
             except Exception as e:
                 raise Exception("Could not parse dot plot ylims: " + str(e))
+
         sig_method_parameters = None
         if args.sig_method_parameters is not None:
-            sig_method_parameters = parse_sig_method_parameters(args.sig_method_parameters)
+            sig_method_parameters = parse_sig_method_parameters(args.sig_method_parameters, group_labels=sample_groups)
 
         replot(
             args.reordered_stats_file,
             args.reordered_sample_file,
             args.output_folder,
             args.file_prefix,
-            name_column=args.name_column,
             fig_height=args.fig_height,
             fig_width=args.fig_width,
             seq_plot_ratio=args.seq_plot_ratio,
@@ -3725,7 +3744,7 @@ def main():
             raise Exception("Sample file not found at " + args.sample_file + "\n" + \
                             "Please provide a sample file with headers ['Name','fastq_r1','fastq_r2']")
         # make sure sample file is in proper format
-        _ = parse_sample_file(args.sample_file)
+        sample_file = parse_sample_file(args.sample_file)
 
         if not os.path.isfile(args.target_file):
             raise Exception("Target file not found at " + args.target_file)
@@ -3738,6 +3757,9 @@ def main():
             raise Exception(
                 "Gene annotations file not found at " + args.gene_annotations
             )
+        
+        if args.region_file is not None and not os.path.isfile(args.region_file):
+            raise Exception("Region file not found at " + args.region_file)
 
         if not os.path.isfile(args.genome_file):
             raise Exception('Cannot find genome fasta file at ' + args.genome_file)
@@ -3774,16 +3796,20 @@ def main():
             output_folder += "/"
         os.makedirs(output_folder, exist_ok=True)
 
+        sample_groups = None
+        if 'group' in sample_df.columns:
+            # if the sample file has a group column, use it to determine the groups
+            sample_groups = list(sample_df["group"].unique())
         plot_group_order = None
         if args.plot_group_order is not None:
             plot_group_order = args.plot_group_order.split(",")
             for group in plot_group_order:
-                if group not in list(pd.read_csv(args.sample_file, sep="\t")["group"].unique()):
-                    raise Exception("In parsing group order (" + args.plot_group_order + ") group " + group + " not found in sample file")
+                if group not in sample_groups:
+                    raise Exception("In parsing group order (" + args.plot_group_order + ") group " + group + " not found in sample file (groups are " + str(sample_groups) + ")")
 
         sig_method_parameters = None
         if args.sig_method_parameters is not None:
-            sig_method_parameters = parse_sig_method_parameters(args.sig_method_parameters)
+            sig_method_parameters = parse_sig_method_parameters(args.sig_method_parameters, group_labels=sample_groups)
 
         process_pools(
             args=args,
@@ -3791,6 +3817,7 @@ def main():
             target_file=args.target_file,
             genome_file=args.genome_file,
             output_folder=output_folder,
+            region_file=args.region_file,
             gene_annotations=args.gene_annotations,
             n_processors=n_processes_for_sea,
             crispresso_quantification_window_center=args.crispresso_quantification_window_center,
@@ -3822,6 +3849,7 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as e:
+        info(traceback.format_exc())
         error('Error: ' + str(e))
         sys.exit(1)
     except KeyboardInterrupt:
