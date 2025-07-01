@@ -1,6 +1,8 @@
 # CRISPRessoSea
 CRISPRessoSea is a tool for processing genome editing from multiple pooled amplicon sequencing experiments to characterizing editing at on- and off-targets across experimental conditions. The tool accepts raw sequencing files as input, performs analysis at each site in each sample, performs statistical analysis of editing, and produces plots and reports detailing editing rates. 
 
+[Installation](#installation) | [Running modes](#running-crispressosea) | [Tutorial](#tutorial) | [Parameters](#complete-command-description)
+
 ## Installation
 CRISPRessoSea can be installed into an environment that contains CRISPResso2 and its dependencies. cas-offinder is optional but required for creating a guide info file from scratch.
 ```
@@ -35,7 +37,7 @@ CRISPRessoSea operates in three primary running modes to streamline the preparat
 ### Download tutorial dataset
 Download the tutorial dataset and change into that directory by running:
 ```
-wget TODO
+wget https://github.com/clementlab/CRISPRessoSea/raw/refs/heads/main/demo/small_demo.tar.gz
 cd CRISPRessoSea_demo
 ```
 This tutorial includes a subset of data from [Cicera et al. 2020](https://www.nature.com/articles/s41587-020-0555-7) investigating the CTLA4_Site9 guide with sequence GGACTGAGGGCCATGGACACNGG. The complete dataset can be found at https://www.ncbi.nlm.nih.gov/bioproject/PRJNA625995
@@ -64,8 +66,9 @@ CRISPRessoSea Process --sample_file samples.demo.txt --target_file guides.demo.t
 ### Replot
 If you'd like to change the order and name of guides, or add or change statistical tests, you can replot using the command:
 ```
-CRISPRessoSea Replot -o 04_replot.ipynb.output --reordered_stats_file 04_replot.ipynb.agg_stats.txt --reordered_sample_file 04_replot.ipynb.samples.txt --sig_method_parameters t_test,Control,Treated,0.05 
+CRISPRessoSea Replot -o replot.output --reordered_stats_file replot_agg_stats.txt --reordered_sample_file replot_samples.txt --sig_method_parameters t_test,Control,Treated,0.05 
 ```
+
 
 ## Complete command description:
 ### MakeGuideFile
