@@ -66,26 +66,46 @@ CTLA4_site9     CTLA4_site9_OB2_CTLA4_site1_500 GGACaGAGGGCCcTGGACAC    AGG     
 CTLA4_site9     CTLA4_site9_OB2_CTLA4_site2_500 GGAaTGAGGcCCATGGACAC    TGG     2       CTLA4_site2:+500        Mismatches: 2
 CTLA4_site9     CTLA4_site9_OB2_CTLA4_site3_500 GGACTGgGGGCCtTGGACAC    AGG     2       CTLA4_site3:+500        Mismatches: 2
 ```
-The `Guide` column is the name of the on-target guide.
-
+- The `Guide` column is the name of the on-target guide. This value is the same for all guides (because they all refer to the same on-target guide). Targets will be grouped by `Guide` value for plotting.
+- The `Target` column specifies a customizable target name that will appear in reports and plots. Here, `MakeGuideFile` assigns each target a different name based on the Guide, the number of mismatches, and the chromosome and start position. In the super-small genome file, I named the chromosomes 'CTLA4_site0', 'CTLA4_site1', etc.
+- The `Sequence` and `PAM` columns show the target sequence and PAM information.
+- The `#MM` column shows the number of mismatches between the on-target and the off-target.
+- The `Locus` column shows the genomic location of the target in the form Chromosome : Strand Position
+- The `Mismatch_info` column is not required, but includes text describing the number of mismatches and bulges (if any). Note that Cas-offinder 3 is required for enumerating off-targets with bulges.
 
 ### Process
 If you ran MakeGuideFile, you can now use the identified offtargets to run in Process mode using the command:
 ```
-CRISPRessoSea Process --sample_file samples.demo.txt --target_file CRISPRessoSea_MakeGuideFileOutput/CRISPRessoSea.guide_info.txt --genome_file test_genome.fa
+CRISPRessoSea Process --sample_file samples.demo.txt --target_file CRISPRessoSea_MakeGuideFileOutput/CRISPRessoSea.guide_info.txt --genome_file demo_genome.fa
 ```
+- The `--sample_file` parameter specifies a text file specifying the names and fastq sequences of samples with columns `Name`, `fastq_r1`, and optionally `fastq_r2` and `group`.
+- The `--target_file` parameter specifies a text file specifying the targets - in this case it is produced by the MakeGuideFile function.
+- The `--genome_file` parameter specifies the path to the genome file.
 
 If you didn't run that step, you can use the guide_info file in the demo dataset:
 ```
-CRISPRessoSea Process --sample_file samples.demo.txt --target_file guides.demo.txt --genome_file test_genome.fa
+CRISPRessoSea Process --sample_file samples.demo.txt --target_file guides.demo.txt --genome_file demo_genome.fa
 ```
+
+The `Process` function will produce an html report at CRISPRessoSea_output_on_samples.demo.txt/output_crispresso_sea.html, as well as an aggregated statistics file at CRISPRessoSea_output_on_samples.demo.txt/aggregated_stats_all.txt which can be modified and input for the Replot function below.
+The aggregated_stats_all.txt file includes a row for each target. Columns specify information about each target (columns `target_id`, `target_name`, `target_chr`, `target_pos`, etc) as well as aggregated information from each sample (columns that end with `_highest_a_g_pct`, `_highest_c_t_pct`, `_highest_indel_pct` and `_tot_reads`). 
 
 ### Replot
 If you'd like to change the order and name of guides, or add or change statistical tests, you can replot using the command:
 ```
-CRISPRessoSea Replot -o replot.output --reordered_stats_file replot_agg_stats.txt --reordered_sample_file replot_samples.txt --sig_method_parameters t_test,Control,Treated,0.05 
+CRISPRessoSea Replot --output_folder replot.output --reordered_stats_file replot_agg_stats.txt --reordered_sample_file replot_samples.txt --sig_method_parameters t_test,Control,Treated,0.05 
 ```
-
+- The `--output_folder` parameter specifies where the replotted output will be produced.
+- The `--reordered_stats_file` parameter is a modified aggregated stats file in the format produced by `Process`.
+- The `--reordered_stats_file` parameter is a modified sample file where samples can be reordered if necessary.
+- The `--sig_method_parameters` parameter specifies the significance test to be applied in the form of: 
+ - none 
+ - hard_cutoff,{cutoff}                     
+ - mean_diff,{group1},{group2},{cutoff} 
+ - t_test,{group1},{group2},{alpha} 
+ - mann_whitney,{group1},{group2},{alpha}
+ - neg_binomial,{group1},{group2},{alpha} 
+ Here, we are using `t_test,Control,Treated,0.05` which specifies the t_test comparing Control vs Treated with a significance threshold of 0.05
 
 ## Complete command description:
 ### MakeGuideFile
