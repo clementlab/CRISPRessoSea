@@ -1,0 +1,7 @@
+Name	r1	group
+Treated_1	Treated_1.fastq.gz	Treated
+Treated_2	Treated_2.fastq.gz	Treated
+Treated_3	Treated_3.fastq.gz	Treated
+Control_1	Control_1.fastq.gz	Control
+Control_2	Control_2.fastq.gz	Control
+Control_3	Control_3.fastq.gz	Control
