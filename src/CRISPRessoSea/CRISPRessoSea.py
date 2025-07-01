@@ -2222,8 +2222,6 @@ def plot_dot_plot(df, value_suffix, plot_title, file_prefix, sample_df, output_f
 
     else:
         melted_df_with_group = melted_df.merge(sample_df, on='Name', how='left')
-        """ this is some markdown"""
-
         """
         #has columns 
         # target_id   target_name   Value   Name    group
@@ -2286,7 +2284,8 @@ def parse_sig_method_parameters(sig_method_parameter_string, group_labels=None):
     Parse the significance method parameters from a string or None.
     """
     significance_error_string = "Error in parsing sig_method_parameters value '"+sig_method_parameter_string+"': "
-    significance_info_string = "Please provide a significance method description in the form of:\n\tnone\n\thard_cutoff,cutoff\n\tneg_binomial,group1,group2,alpha\n\tt_test,group1,group2,alpha\n\tmean_diff,group1,group2,cutoff"
+    significance_info_string = "Please provide a significance method description in the form of:\n\tnone\n\thard_cutoff,cutoff\n\tmean_diff,group1,group2,cutoff\n\tt_test,group1,group2,alpha\n\tmann_whitney,group1,group2,alpha\n\tneg_binomial,group1,group2,alpha\n"
+
     if sig_method_parameter_string is None or sig_method_parameter_string.strip() == "":
         return {
             'method': SigMethod.NONE,
@@ -2910,7 +2909,7 @@ def plot_targets_and_heatmap(
     ax2.set_yticks([])
     ax2.set_ylabel('')
 
-    info("Plotted heatmap to " + outfile_name)
+    info("Plotted " + outfile_name)
 
     # Adding gene annotation labels to right of heatmap
     if row_annotations is not None and set(row_annotations) != {
@@ -3481,7 +3480,7 @@ def main():
     )
     process_parser.add_argument(
         "--sig_method_parameters",
-        help="Parameters for the significance method in the form of:\n\tnone\n\thard_cutoff,cutoff\n\tneg_binomial,group1,group2,alpha\n\tt_test,group1,group2,alpha\n\tmean_diff,group1,group2,cutoff",
+        help="Parameters for the significance method in the form of:\n\tnone\n\thard_cutoff,cutoff\n\tmean_diff,group1,group2,cutoff\n\tt_test,group1,group2,alpha\n\tmann_whitney,group1,group2,alpha\n\tneg_binomial,group1,group2,alpha\n",
         default=None,
         type=str,
     )
@@ -3545,7 +3544,7 @@ def main():
     )
     plot_parser.add_argument(
         "--sig_method_parameters",
-        help="Parameters for the significance method in the form of:\n\tnone\n\thard_cutoff,cutoff\n\tneg_binomial,group1,group2,alpha\n\tt_test,group1,group2,alpha\n\tmean_diff,group1,group2,cutoff",
+        help="Parameters for the significance method in the form of:\n\tnone\n\thard_cutoff,cutoff\n\tmean_diff,group1,group2,cutoff\n\tt_test,group1,group2,alpha\n\tmann_whitney,group1,group2,alpha\n\tneg_binomial,group1,group2,alpha\n",
         default=None,
         type=str,
     )

@@ -139,10 +139,10 @@ options:
 ```
 usage: CRISPRessoSea.py Process [-h] [-o OUTPUT_FOLDER] -t TARGET_FILE -s SAMPLE_FILE [--gene_annotations GENE_ANNOTATIONS] -x GENOME_FILE [-r REGION_FILE] [-p N_PROCESSES]
                                 [--crispresso_quantification_window_center CRISPRESSO_QUANTIFICATION_WINDOW_CENTER] [--crispresso_quantification_window_size CRISPRESSO_QUANTIFICATION_WINDOW_SIZE]
-                                [--crispresso_base_editor_output] [--crispresso_default_min_aln_score CRISPRESSO_DEFAULT_MIN_ALN_SCORE] [--crispresso_plot_window_size CRISPRESSO_PLOT_WINDOW_SIZE] [--allow_unplaced_chrs]
-                                [--plot_only_complete_targets] [--min_amplicon_coverage MIN_AMPLICON_COVERAGE] [--sort_based_on_mismatch] [--allow_target_match_to_other_region_loc]
-                                [--top_percent_cutoff TOP_PERCENT_CUTOFF] [--min_amplicon_len MIN_AMPLICON_LEN] [--fail_on_pooled_fail] [--plot_group_order PLOT_GROUP_ORDER]
-                                [--sig_method_parameters SIG_METHOD_PARAMETERS] [-v VERBOSITY] [--debug]
+                                [--crispresso_base_editor_output] [--crispresso_default_min_aln_score CRISPRESSO_DEFAULT_MIN_ALN_SCORE] [--crispresso_plot_window_size CRISPRESSO_PLOT_WINDOW_SIZE]
+                                [--allow_unplaced_chrs] [--plot_only_complete_targets] [--min_amplicon_coverage MIN_AMPLICON_COVERAGE] [--sort_based_on_mismatch]
+                                [--allow_target_match_to_other_region_loc] [--top_percent_cutoff TOP_PERCENT_CUTOFF] [--min_amplicon_len MIN_AMPLICON_LEN] [--fail_on_pooled_fail]
+                                [--plot_group_order PLOT_GROUP_ORDER] [--sig_method_parameters SIG_METHOD_PARAMETERS] [-v VERBOSITY] [--debug]
 
 options:
   -h, --help            show this help message and exit
@@ -157,26 +157,28 @@ options:
   -x GENOME_FILE, --genome_file GENOME_FILE
                         Bowtie2-indexed genome file - files ending in and .bt2 must be present in the same folder. (default: None)
   -r REGION_FILE, --region_file REGION_FILE
-                        Region file - a tab-separated .bed file with regions to analyze with columns for 'chr', 'start', and 'end'. If not provided, regions will be inferred by read alignment. (default: None)
+                        Region file - a tab-separated .bed file with regions to analyze with columns for 'chr', 'start', and 'end'. If not provided, regions will be inferred by read alignment. (default:
+                        None)
   -p N_PROCESSES, --n_processes N_PROCESSES
                         Number of processes to use. Set to "max" to use all available processors. (default: 8)
   --crispresso_quantification_window_center CRISPRESSO_QUANTIFICATION_WINDOW_CENTER
-                        Center of quantification window to use within respect to the 3' end of the provided sgRNA sequence. Remember that the sgRNA sequence must be entered without the PAM. For cleaving nucleases, this
-                        is the predicted cleavage position. The default is -3 and is suitable for the Cas9 system. For alternate nucleases, other cleavage offsets may be appropriate, for example, if using Cpf1 this
-                        parameter would be set to 1. For base editors, this could be set to -17 to only include mutations near the 5' end of the sgRNA. (default: -3)
+                        Center of quantification window to use within respect to the 3' end of the provided sgRNA sequence. Remember that the sgRNA sequence must be entered without the PAM. For cleaving
+                        nucleases, this is the predicted cleavage position. The default is -3 and is suitable for the Cas9 system. For alternate nucleases, other cleavage offsets may be appropriate, for
+                        example, if using Cpf1 this parameter would be set to 1. For base editors, this could be set to -17 to only include mutations near the 5' end of the sgRNA. (default: -3)
   --crispresso_quantification_window_size CRISPRESSO_QUANTIFICATION_WINDOW_SIZE
-                        Size (in bp) of the quantification window extending from the position specified by the '--cleavage_offset' or '--quantification_window_center' parameter in relation to the provided guide RNA
-                        sequence(s) (--sgRNA). Mutations within this number of bp from the quantification window center are used in classifying reads as modified or unmodified. A value of 0 disables this window and
-                        indels in the entire amplicon are considered. Default is 1, 1bp on each side of the cleavage position for a total length of 2bp. (default: 1)
+                        Size (in bp) of the quantification window extending from the position specified by the '--cleavage_offset' or '--quantification_window_center' parameter in relation to the
+                        provided guide RNA sequence(s) (--sgRNA). Mutations within this number of bp from the quantification window center are used in classifying reads as modified or unmodified. A value
+                        of 0 disables this window and indels in the entire amplicon are considered. Default is 1, 1bp on each side of the cleavage position for a total length of 2bp. (default: 1)
   --crispresso_base_editor_output
                         Outputs plots and tables to aid in analysis of base editor studies. (default: False)
   --crispresso_default_min_aln_score CRISPRESSO_DEFAULT_MIN_ALN_SCORE
                         Default minimum homology score for a read to align to a reference amplicon. (default: 60)
   --crispresso_plot_window_size CRISPRESSO_PLOT_WINDOW_SIZE
-                        Defines the size of the window extending from the quantification window center to plot. Nucleotides within plot_window_size of the quantification_window_center for each guide are plotted.
-                        (default: 20)
+                        Defines the size of the window extending from the quantification window center to plot. Nucleotides within plot_window_size of the quantification_window_center for each guide are
+                        plotted. (default: 20)
   --allow_unplaced_chrs
-                        Allow regions on unplaced chromosomes (chrUn, random, etc). By default, regions on these chromosomes are excluded. If set, regions on these chromosomes will be included. (default: False)
+                        Allow regions on unplaced chromosomes (chrUn, random, etc). By default, regions on these chromosomes are excluded. If set, regions on these chromosomes will be included. (default:
+                        False)
   --plot_only_complete_targets
                         Plot only targets with all values. If not set, all targets will be plotted. (default: False)
   --min_amplicon_coverage MIN_AMPLICON_COVERAGE
@@ -184,11 +186,11 @@ options:
   --sort_based_on_mismatch
                         Sort targets based on mismatch count. If true, the on-target will always be first (default: False)
   --allow_target_match_to_other_region_loc
-                        If true, targets can match to regions even if the target chr:start is not in that region (e.g. if the target sequence is found in that region). If false/unset, targets can only match to regions
-                        matching the target chr:start position. This flag should be set if the genome for guide design was not the same as the analysis genome. (default: False)
+                        If true, targets can match to regions even if the target chr:start is not in that region (e.g. if the target sequence is found in that region). If false/unset, targets can only
+                        match to regions matching the target chr:start position. This flag should be set if the genome for guide design was not the same as the analysis genome. (default: False)
   --top_percent_cutoff TOP_PERCENT_CUTOFF
-                        The top percent of aligned regions (by region read depth) to consider in finding non-overlapping regions during demultiplexing. This is a float between 0 and 1. For example, if set to 0.2, the top
-                        20% of regions (by read depth) will be considered. (default: 0.2)
+                        The top percent of aligned regions (by region read depth) to consider in finding non-overlapping regions during demultiplexing. This is a float between 0 and 1. For example, if
+                        set to 0.2, the top 20% of regions (by read depth) will be considered. (default: 0.2)
   --min_amplicon_len MIN_AMPLICON_LEN
                         The minimum length of an amplicon to consider in finding non-overlapping regions during demultiplexing. Amplicons shorter than this will be ignored. (default: 50)
   --fail_on_pooled_fail
@@ -196,7 +198,8 @@ options:
   --plot_group_order PLOT_GROUP_ORDER
                         Order of the groups to plot (if None, the groups will be sorted alphabetically) (default: None)
   --sig_method_parameters SIG_METHOD_PARAMETERS
-                        Parameters for the significance method in the form of: none hard_cutoff,cutoff neg_binomial,group1,group2,alpha t_test,group1,group2,alpha mean_diff,group1,group2,cutoff (default: None)
+                        Parameters for the significance method in the form of: none hard_cutoff,cutoff mean_diff,group1,group2,cutoff t_test,group1,group2,alpha mann_whitney,group1,group2,alpha
+                        neg_binomial,group1,group2,alpha (default: None)
   -v VERBOSITY, --verbosity VERBOSITY
                         Verbosity level of output to the console (1-4) 4 is the most verbose (default: 3)
   --debug               Print debug information (default: False)
@@ -227,7 +230,8 @@ options:
   --plot_group_order PLOT_GROUP_ORDER
                         Order of the groups to plot (if None, the groups will be sorted alphabetically) (default: None)
   --sig_method_parameters SIG_METHOD_PARAMETERS
-                        Parameters for the significance method in the form of: none hard_cutoff,cutoff neg_binomial,group1,group2,alpha t_test,group1,group2,alpha mean_diff,group1,group2,cutoff (default: None)
+                        Parameters for the significance method in the form of: none hard_cutoff,cutoff mean_diff,group1,group2,cutoff t_test,group1,group2,alpha mann_whitney,group1,group2,alpha
+                        neg_binomial,group1,group2,alpha (default: None)
   --dot_plot_ylims DOT_PLOT_YLIMS
                         Comma-separated min,max y-axis limits for the dot plot. If None, the y-axis limits will be set automatically. (default: None,None)
   --heatmap_max_value HEATMAP_MAX_VALUE
