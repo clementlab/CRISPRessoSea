@@ -28,3 +28,6 @@ Homepage = "https://github.com/clementlab/CRISPRessoSea"
 
 [project.scripts]
 CRISPRessoSea = "CRISPRessoSea.CRISPRessoSea:main"
+
+[tool.setuptools]
+include-package-data = true
