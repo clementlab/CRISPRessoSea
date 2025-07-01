@@ -11,16 +11,15 @@ authors = [
 ]
 readme = "README.md"
 requires-python = ">=3.7"
-license = { text = "MIT" }
 dependencies = [
     "numpy",
     "pandas",
     "matplotlib",
     "seaborn",
-    "scipy",
+    "scipy<=1.15.3", # Temporary fix for a breaking change in scipy/statsmodels https://github.com/statsmodels/statsmodels/issues/9542
     "statsmodels",
     "jinja2",
-    "crispresso2"
+    "crispresso2",
 ]
 
 [project.urls]
