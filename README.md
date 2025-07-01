@@ -12,6 +12,7 @@ conda config --add channels conda-forge
 
 conda create -y -n CRISPRessoSea bioconda::crispresso2 bioconda::cas-offinder # Create CRISPRessoSea conda environment
 conda activate CRISPRessoSea
+conda install -y scipy<=1.15.3' ## This temporarily repairs a breaking change in scipy/statsmodels https://github.com/statsmodels/statsmodels/issues/9542
 pip install git+https://github.com/clementlab/CRISPRessoSea.git
 ```
 
@@ -38,11 +39,12 @@ CRISPRessoSea operates in three primary running modes to streamline the preparat
 Download the tutorial dataset and change into that directory by running:
 ```
 wget https://github.com/clementlab/CRISPRessoSea/raw/refs/heads/main/demo/small_demo.tar.gz
+tar -xzf small_demo.tar.gz
 cd CRISPRessoSea_demo
 ```
-This tutorial includes a subset of data from [Cicera et al. 2020](https://www.nature.com/articles/s41587-020-0555-7) investigating the CTLA4_Site9 guide with sequence GGACTGAGGGCCATGGACACNGG. The complete dataset can be found at https://www.ncbi.nlm.nih.gov/bioproject/PRJNA625995
+This tutorial includes a subset of data from [Cicera et al. 2020](https://www.nature.com/articles/s41587-020-0555-7) investigating the CTLA4_Site9 guide with sequence GGACTGAGGGCCATGGACACNGG. The complete dataset can be found at [https://www.ncbi.nlm.nih.gov/bioproject/PRJNA625995](https://www.ncbi.nlm.nih.gov/bioproject/PRJNA625995).
 
-For ease of use, I've created a super-small genome that includes the genomic sequence of only the on-target and three off-by-2 off-targets.
+For ease of use, I've [created a super-small genome](demo/make_demo/small_demo/01_make_demo.ipynb) that includes the genomic sequence of only the on-target and three off-by-2 off-targets. The genomic sequence is contained in 'demo_genome.fa' and bowtie2 indices for the genome were generated using `bowtie2-build demo_genome.fa demo_genome`. 
 
 ### MakeGuideFile
  You can create a guide info file (e.g. for designing a pooled experiment to profile off-targets) by running:
@@ -50,7 +52,22 @@ For ease of use, I've created a super-small genome that includes the genomic seq
 ```
 CRISPRessoSea MakeGuideFile --guide_seq GGACTGAGGGCCATGGACAC --pam NGG --guide_name CTLA4_site9 --max_mismatches 2 --genome_file demo_genome.fa
 ```
+- The `--guide_seq` parameter specify the on-target guide sequence and does not include the PAM sequence.
+- The `--guide_name` is for convenience, and all off-targets are annotated with this guide name (see `Guide` column in output below).
+- The `--pam` and `--max_mismatches` parameters are used for finding off-target locations. Here, for our small example we'll search for up to 2 mismatches, but in practice up to 4 or 5 mismatches are investigated.
+- The `--genome_file` parameter specifies the path to the genome file. Here we are using a super-small genome with only the on-target and three off-by-2 off-targets.
 Note that this requres [Cas-offinder](https://github.com/snugel/cas-offinder) for enumerating off-target sites.
+
+This produces a guide info file `CRISPRessoSea_MakeGuideFileOutput//CRISPRessoSea.guide_info.txt` that contains the on- and off-target locations for the CTLA4_site9 guide.:
+```
+Guide   Target  Sequence        PAM     #MM     Locus   Mismatch_info
+CTLA4_site9     CTLA4_site9_ON_CTLA4_site0_500  GGACTGAGGGCCATGGACAC    GGG     0       CTLA4_site0:+500        Mismatches: 0
+CTLA4_site9     CTLA4_site9_OB2_CTLA4_site1_500 GGACaGAGGGCCcTGGACAC    AGG     2       CTLA4_site1:+500        Mismatches: 2
+CTLA4_site9     CTLA4_site9_OB2_CTLA4_site2_500 GGAaTGAGGcCCATGGACAC    TGG     2       CTLA4_site2:+500        Mismatches: 2
+CTLA4_site9     CTLA4_site9_OB2_CTLA4_site3_500 GGACTGgGGGCCtTGGACAC    AGG     2       CTLA4_site3:+500        Mismatches: 2
+```
+The `Guide` column is the name of the on-target guide.
+
 
 ### Process
 If you ran MakeGuideFile, you can now use the identified offtargets to run in Process mode using the command:
