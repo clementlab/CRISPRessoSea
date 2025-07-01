@@ -3744,7 +3744,7 @@ def main():
             raise Exception("Sample file not found at " + args.sample_file + "\n" + \
                             "Please provide a sample file with headers ['Name','fastq_r1','fastq_r2']")
         # make sure sample file is in proper format
-        sample_file = parse_sample_file(args.sample_file)
+        sample_df = parse_sample_file(args.sample_file)
 
         if not os.path.isfile(args.target_file):
             raise Exception("Target file not found at " + args.target_file)
