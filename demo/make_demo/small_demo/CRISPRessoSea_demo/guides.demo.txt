@@ -1,1 +1,5 @@
-CRISPRessoSea_MakeGuideFileOutput/CRISPRessoSea.guide_info.txt
+Guide	Target	Sequence	PAM	#MM	Locus	Mismatch_info
+CTLA4_site9	CTLA4_site9_ON_CTLA4_site0_500	GGACTGAGGGCCATGGACAC	GGG	0	CTLA4_site0:+500	Mismatches: 0
+CTLA4_site9	CTLA4_site9_OB2_CTLA4_site1_500	GGACaGAGGGCCcTGGACAC	AGG	2	CTLA4_site1:+500	Mismatches: 2
+CTLA4_site9	CTLA4_site9_OB2_CTLA4_site2_500	GGAaTGAGGcCCATGGACAC	TGG	2	CTLA4_site2:+500	Mismatches: 2
+CTLA4_site9	CTLA4_site9_OB2_CTLA4_site3_500	GGACTGgGGGCCtTGGACAC	AGG	2	CTLA4_site3:+500	Mismatches: 2
