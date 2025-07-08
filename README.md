@@ -82,7 +82,7 @@ CRISPRessoSea Process --sample_file samples.demo.txt --target_file CRISPRessoSea
 - The `--target_file` parameter specifies a text file specifying the targets - in this case it is produced by the MakeGuideFile function.
 - The `--genome_file` parameter specifies the path to the genome file.
 
-If you didn't run `MakeGuideFile`, you can use the guide_info file in the demo dataset (see [samples.demo.txt](https://raw.githubusercontent.com/clementlab/CRISPRessoSea/refs/heads/main/demo/make_demo/small_demo/CRISPRessoSea_demo/samples.demo.txt) and [guides.demo.txt](https://raw.githubusercontent.com/clementlab/CRISPRessoSea/refs/heads/main/demo/make_demo/small_demo/CRISPRessoSea_demo/guides.demo.txt):
+If you didn't run `MakeGuideFile`, you can use the guide_info file in the demo dataset (see [samples.demo.txt](https://raw.githubusercontent.com/clementlab/CRISPRessoSea/refs/heads/main/demo/make_demo/small_demo/CRISPRessoSea_demo/samples.demo.txt) and [guides.demo.txt](https://raw.githubusercontent.com/clementlab/CRISPRessoSea/refs/heads/main/demo/make_demo/small_demo/CRISPRessoSea_demo/guides.demo.txt)):
 ```
 CRISPRessoSea Process --sample_file samples.demo.txt --target_file guides.demo.txt --genome_file demo_genome.fa
 ```
