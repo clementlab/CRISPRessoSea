@@ -55,7 +55,7 @@ CRISPRessoSea MakeGuideFile --guide_seq GGACTGAGGGCCATGGACAC --pam NGG --guide_n
 - The `--guide_name` is for convenience, and all off-targets are annotated with this guide name (see `Guide` column in output below).
 - The `--pam` and `--max_mismatches` parameters are used for finding off-target locations. Here, for our small example we'll search for up to 2 mismatches, but in practice up to 4 or 5 mismatches are investigated.
 - The `--genome_file` parameter specifies the path to the genome file. Here we are using a super-small genome with only the on-target and three off-by-2 off-targets.
-- 
+  
 Note that running MakeGuideFile requres [Cas-offinder](https://github.com/snugel/cas-offinder) for enumerating off-target sites.
 
 This produces a guide info file `CRISPRessoSea_MakeGuideFileOutput//CRISPRessoSea.guide_info.txt` that contains the on- and off-target locations for the CTLA4_site9 guide.:
