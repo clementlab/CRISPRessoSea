@@ -55,7 +55,8 @@ CRISPRessoSea MakeGuideFile --guide_seq GGACTGAGGGCCATGGACAC --pam NGG --guide_n
 - The `--guide_name` is for convenience, and all off-targets are annotated with this guide name (see `Guide` column in output below).
 - The `--pam` and `--max_mismatches` parameters are used for finding off-target locations. Here, for our small example we'll search for up to 2 mismatches, but in practice up to 4 or 5 mismatches are investigated.
 - The `--genome_file` parameter specifies the path to the genome file. Here we are using a super-small genome with only the on-target and three off-by-2 off-targets.
-Note that this requres [Cas-offinder](https://github.com/snugel/cas-offinder) for enumerating off-target sites.
+- 
+Note that running MakeGuideFile requres [Cas-offinder](https://github.com/snugel/cas-offinder) for enumerating off-target sites.
 
 This produces a guide info file `CRISPRessoSea_MakeGuideFileOutput//CRISPRessoSea.guide_info.txt` that contains the on- and off-target locations for the CTLA4_site9 guide.:
 ```
@@ -73,7 +74,7 @@ CTLA4_site9     CTLA4_site9_OB2_CTLA4_site3_500 GGACTGgGGGCCtTGGACAC    AGG     
 - The `Mismatch_info` column is not required, but includes text describing the number of mismatches and bulges (if any). Note that Cas-offinder 3 is required for enumerating off-targets with bulges.
 
 ### Process
-If you ran MakeGuideFile, you can now use the identified offtargets to run in Process mode using the command:
+If you ran `MakeGuideFile`, you can now use the identified offtargets to run in `Process` mode using the command:
 ```
 CRISPRessoSea Process --sample_file samples.demo.txt --target_file CRISPRessoSea_MakeGuideFileOutput/CRISPRessoSea.guide_info.txt --genome_file demo_genome.fa
 ```
@@ -81,7 +82,7 @@ CRISPRessoSea Process --sample_file samples.demo.txt --target_file CRISPRessoSea
 - The `--target_file` parameter specifies a text file specifying the targets - in this case it is produced by the MakeGuideFile function.
 - The `--genome_file` parameter specifies the path to the genome file.
 
-If you didn't run that step, you can use the guide_info file in the demo dataset:
+If you didn't run `MakeGuideFile`, you can use the guide_info file in the demo dataset (see [samples.demo.txt](https://raw.githubusercontent.com/clementlab/CRISPRessoSea/refs/heads/main/demo/make_demo/small_demo/CRISPRessoSea_demo/samples.demo.txt) and [guides.demo.txt](https://raw.githubusercontent.com/clementlab/CRISPRessoSea/refs/heads/main/demo/make_demo/small_demo/CRISPRessoSea_demo/guides.demo.txt):
 ```
 CRISPRessoSea Process --sample_file samples.demo.txt --target_file guides.demo.txt --genome_file demo_genome.fa
 ```
@@ -96,15 +97,16 @@ CRISPRessoSea Replot --output_folder replot.output --reordered_stats_file replot
 ```
 - The `--output_folder` parameter specifies where the replotted output will be produced.
 - The `--reordered_stats_file` parameter is a modified aggregated stats file in the format produced by `Process`.
-- The `--reordered_stats_file` parameter is a modified sample file where samples can be reordered if necessary.
+- The `--reordered_samples_file` parameter is a modified sample file where samples can be reordered if necessary.
 - The `--sig_method_parameters` parameter specifies the significance test to be applied in the form of: 
  - none 
  - hard_cutoff,{cutoff}                     
  - mean_diff,{group1},{group2},{cutoff} 
  - t_test,{group1},{group2},{alpha} 
  - mann_whitney,{group1},{group2},{alpha}
- - neg_binomial,{group1},{group2},{alpha} 
- Here, we are using `t_test,Control,Treated,0.05` which specifies the t_test comparing Control vs Treated with a significance threshold of 0.05
+ - neg_binomial,{group1},{group2},{alpha}
+   
+ Here, we specify `t_test,Control,Treated,0.05` which specifies the t_test comparing Control vs Treated with a significance threshold of 0.05
 
 ## Complete command description:
 ### MakeGuideFile
