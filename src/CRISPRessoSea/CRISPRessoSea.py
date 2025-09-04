@@ -1,5 +1,6 @@
 import argparse
 import glob
+import importlib
 import logging
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -17,9 +18,11 @@ import traceback
 from CRISPResso2 import CRISPResso2Align, CRISPRessoMultiProcessing, CRISPRessoShared
 from CRISPResso2.CRISPRessoReports import CRISPRessoReport
 
+
 from collections import defaultdict
 from copy import deepcopy
 from enum import Enum
+from importlib.metadata import version
 from jinja2 import Environment, FileSystemLoader, make_logging_undefined
 from matplotlib.colors import ListedColormap
 from statsmodels.api import GLM, families
@@ -28,7 +31,10 @@ from statsmodels.discrete.discrete_model import NegativeBinomial
 
 mpl.rcParams["pdf.fonttype"] = 42
 
-__version__ = "0.1.3"
+def read_version():
+    return importlib.metadata.version('CRISPRessoSea')
+
+__version__ = read_version()
 
 C2PRO_INSTALLED = False
 
@@ -1087,7 +1093,7 @@ def parse_target_info(target_file, sort_based_on_mismatch=False):
                 + "Expecting columns " + str(required_columns)
             )
 
-    target_df["#MM"] = target_df["#MM"].fillna(0).astype(int)
+    target_df["#MM"] = target_df["#MM"].fillna(0).infer_objects(copy=False).astype(int)
     target_df["sort_index"] = target_df.index
 
     on_targets = target_df.sort_values(by=["#MM", "sort_index"]).drop_duplicates(
@@ -1994,11 +2000,11 @@ def create_plots(
     heatmap_fig_height=24,
     heatmap_fig_width=24,
     heatmap_seq_plot_ratio=1,
-    heatmap_title_fontsize=30,
-    heatmap_y_tick_fontsize=16,
-    heatmap_x_tick_fontsize=16,
+    title_fontsize=30,
+    y_tick_fontsize=16,
+    x_tick_fontsize=16,
+    legend_title_fontsize=20,
     heatmap_nucleotide_fontsize=14,
-    heatmap_legend_fontsize=20,
     heatmap_legend_ncol=None,
     heatmap_max_value=None,
     heatmap_min_value=None,
@@ -2021,11 +2027,11 @@ def create_plots(
         heatmap_fig_height (int, optional): the height of the heatmap figure (Defaults to 24)
         heatmap_fig_width (int, optional): the width of the heatmap figure (Defaults to 24)
         heatmap_seq_plot_ratio (int, optional): the ratio of the width of the target sequence plot to the data plot (>1 means the seq plot is larger than the data plot) (Defaults to 1)
-        heatmap_title_fontsize (int, optional): the fontsize of the plot titles for the heatmap (Defaults to 30)
-        heatmap_y_tick_fontsize (int, optional): the fontsize of the y-axis tick labels for the heatmap (Defaults to 16)
-        heatmap_x_tick_fontsize (int, optional): the fontsize of the x-axis tick labels for the heatmap (Defaults to 16)
-        heatmap_nucleotide_fontsize (int, optional): the fontsize of the nucleotide labels in the heatmap(Defaults to 14)
-        heatmap_legend_fontsize (int, optional): the fontsize of the legend title (Defaults to 20)
+        title_fontsize (int, optional): the fontsize of the plot titles for the heatmap and dot plot (Defaults to 30)
+        y_tick_fontsize (int, optional): the fontsize of the y-axis tick labels and legend labels for the heatmap and dot plot (Defaults to 16)
+        x_tick_fontsize (int, optional): the fontsize of the x-axis tick labels for the heatmap and dot plot (Defaults to 16)
+        legend_title_fontsize (int, optional): the fontsize of the legend title and axis labels (Defaults to 20)
+        heatmap_nucleotide_fontsize (int, optional): the fontsize of the nucleotide labels in the heatmap (Defaults to 14)
         heatmap_legend_ncol (int, optional): the number of columns in the legend (if None, each value legend value will have a columns)
         heatmap_max_value (float, optional): the maximum value for the heatmap color scale (Defaults to None)
         heatmap_min_value (float, optional): the minimum value for the heatmap color scale (Defaults to None)
@@ -2110,11 +2116,11 @@ def create_plots(
                 fig_height=heatmap_fig_height,
                 fig_width=heatmap_fig_width,
                 seq_plot_ratio=heatmap_seq_plot_ratio,
-                title_fontsize=heatmap_title_fontsize,
-                y_tick_fontsize=heatmap_y_tick_fontsize,
-                x_tick_fontsize=heatmap_x_tick_fontsize,
+                title_fontsize=title_fontsize,
+                y_tick_fontsize=y_tick_fontsize,
+                x_tick_fontsize=x_tick_fontsize,
+                legend_title_fontsize=legend_title_fontsize,
                 nucleotide_fontsize=heatmap_nucleotide_fontsize,
-                legend_title_fontsize=heatmap_legend_fontsize,
                 df_data_heat_max=heatmap_max_value,
                 df_data_heat_min=heatmap_min_value,
                 legend_ncol=heatmap_legend_ncol,
@@ -2143,6 +2149,10 @@ def create_plots(
                     output_folder,
                     plot_group_order=plot_group_order,
                     dot_plot_ylims=dot_plot_ylims,
+                    title_fontsize=title_fontsize,
+                    y_tick_fontsize=y_tick_fontsize,
+                    x_tick_fontsize=x_tick_fontsize,
+                    legend_title_fontsize=legend_title_fontsize,
                 )
                 if crispresso2_info is not None:
                     crispresso2_info["results"]["general_plots"][
@@ -2162,7 +2172,8 @@ def create_plots(
 
 
 # Function to melt DataFrame and plot dot plot
-def plot_dot_plot(df, value_suffix, plot_title, file_prefix, sample_df, output_folder, plot_group_order=None, dot_plot_ylims=[None, None]):
+def plot_dot_plot(df, value_suffix, plot_title, file_prefix, sample_df, output_folder, plot_group_order=None, dot_plot_ylims=[None, None], 
+                  title_fontsize=20, y_tick_fontsize=16, x_tick_fontsize=16, legend_title_fontsize=18):
     """
     Plots a dot plot showing average editing rate for each group
 
@@ -2175,6 +2186,10 @@ def plot_dot_plot(df, value_suffix, plot_title, file_prefix, sample_df, output_f
         output_folder (str): Folder to save the output plot
         plot_group_order (list, optional): Order of groups to plot. If None, groups will be sorted alphabetically.
         dot_plot_ylims (list, optional): Y-axis limits [min,max] for the plot. Default is [None, None], which means auto-scaling.
+        title_fontsize (int, optional): Font size for the plot title. Default is 20.
+        y_tick_fontsize (int, optional): Font size for the y-axis tick labels and legend labels. Default is 16.
+        x_tick_fontsize (int, optional): Font size for the x-axis tick labels. Default is 16.
+        legend_title_fontsize (int, optional): Font size for the axis and legend titles. Default is 18.
     """
     group_counts = sample_df["group"].value_counts()
     
@@ -2200,26 +2215,46 @@ def plot_dot_plot(df, value_suffix, plot_title, file_prefix, sample_df, output_f
 
     if group_counts.shape[0] <= 1: # if only one group (or none)
         plt.figure(figsize=(20, 6))
-        sns.stripplot(
+        ax = sns.stripplot(
             data=melted_df,
-            x="target_name",
+            x="target_id",
             y="Value",
             hue="Name",
             jitter=0.3,
             s=10,
             alpha=0.6,
         )
+
+        # Get the legend handles and labels
+        handles, labels = ax.get_legend_handles_labels()
+
+        # Adjust the alpha of each legend handle
+        for handle in handles:
+            handle.set_alpha(0.6) # Set the alpha to match the plot markers
+        legend = ax.legend(handles, labels, title="Sample", fontsize=y_tick_fontsize, loc='upper right')
+        legend.get_title().set_fontsize(legend_title_fontsize)
+
+        # Set x-tick labels to target_name, matching the order of target_id
+        target_ids = melted_df["target_id"].unique()
+        target_names = []
+        for tid in target_ids:
+            # Get the first matching target_name for this target_id
+            name = melted_df.loc[melted_df["target_id"] == tid, "target_name"].iloc[0]
+            target_names.append(name)
+        ax.set_xticks(range(len(target_ids)))
+        ax.set_xticklabels(target_names, rotation=90, fontsize=x_tick_fontsize)
+        ax.tick_params(axis='y', labelsize=y_tick_fontsize)
+
         plt.ylim(dot_plot_ylims[0], dot_plot_ylims[1])
-        plt.title(f"Dot Plot of {plot_title} by Target")
-        plt.xlabel("Target Name")
-        plt.ylabel(plot_title)
-        plt.xticks(fontsize=8, rotation=90)
+        plt.title(f"Dot Plot of {plot_title} by Target", fontsize=title_fontsize)
+        plt.xlabel("Target Name", fontsize=legend_title_fontsize)
+        plt.ylabel(plot_title, fontsize=legend_title_fontsize)
         plt.subplots_adjust(left=0.1, right=0.9, top=0.9, bottom=0.2)
         outfile_name = os.path.join(output_folder, file_prefix)
         plt.savefig(outfile_name + ".pdf", bbox_inches="tight")
         plt.savefig(outfile_name + ".png", bbox_inches="tight")
         plt.close()
-
+        
     else:
         melted_df_with_group = melted_df.merge(sample_df, on='Name', how='left')
         """
@@ -2237,7 +2272,7 @@ def plot_dot_plot(df, value_suffix, plot_title, file_prefix, sample_df, output_f
         plt.figure(figsize=(20, 6))
         sns.stripplot(
                 data=melted_df_with_group,
-                x="target_name",
+                x="target_id",
                 y="Value",
                 hue="group",
                 jitter=0.3,
@@ -2247,9 +2282,9 @@ def plot_dot_plot(df, value_suffix, plot_title, file_prefix, sample_df, output_f
                 dodge=True,
                 legend=False
             )
-        sns.barplot(
+        ax = sns.barplot(
             data=melted_df_with_group,
-            x="target_name",
+            x="target_id",
             y="Value",
             hue="group",
             dodge=True,
@@ -2258,18 +2293,29 @@ def plot_dot_plot(df, value_suffix, plot_title, file_prefix, sample_df, output_f
             palette="Set2",
         )
 
+        # Set x-tick labels to target_name, matching the order of target_id
+        target_ids = melted_df_with_group["target_id"].unique()
+        target_names = []
+        for tid in target_ids:
+            # Get the first matching target_name for this target_id
+            name = melted_df_with_group.loc[melted_df_with_group["target_id"] == tid, "target_name"].iloc[0]
+            target_names.append(name)
+        ax.set_xticks(range(len(target_ids)))
+        ax.set_xticklabels(target_names, rotation=90, fontsize=x_tick_fontsize)
+        ax.tick_params(axis='y', labelsize=y_tick_fontsize)
+
         plt.ylim(dot_plot_ylims[0], dot_plot_ylims[1])
-        plt.title(f"{plot_title} by Target and Group")
-        plt.xlabel("Target Name")
-        plt.ylabel(plot_title)
-        plt.xticks(fontsize=8, rotation=90)
-        plt.legend(title="Group")
+        plt.title(f"{plot_title} by Target and Group", fontsize=title_fontsize)
+        plt.xlabel("Target Name", fontsize=legend_title_fontsize)
+        plt.ylabel(plot_title, fontsize=legend_title_fontsize)
+        legend = plt.legend(title="Group", fontsize=y_tick_fontsize)
+        legend.get_title().set_fontsize(legend_title_fontsize)
+        
         plt.subplots_adjust(left=0.1, right=0.9, top=0.9, bottom=0.2)
         outfile_name = os.path.join(output_folder, file_prefix)
         plt.savefig(outfile_name + ".pdf", bbox_inches="tight")
         plt.savefig(outfile_name + ".png", bbox_inches="tight")
         plt.close()
-
 
 class SigMethod(Enum):
     NONE = 0
@@ -2399,7 +2445,7 @@ def identify_significant_targets(df_data, df_total_count, sample_groups, sig_met
         
         for idx, (df_idx, target_row) in enumerate(df_data.iterrows()):
             #check if any values are na
-            if target_row[group_1_inds].isna().any() or target_row[group_2_inds].isna().any():
+            if target_row.iloc[group_1_inds].isna().any() or target_row.iloc[group_2_inds].isna().any():
                 res_table_rows.append([
                     group_1_data.nanmean(),
                     group_2_data.nanmean(),
@@ -2408,8 +2454,8 @@ def identify_significant_targets(df_data, df_total_count, sample_groups, sig_met
                     False,  # No significance if NA values are present
                 ])
                 continue
-            group_1_data = target_row[group_1_inds].values
-            group_2_data = target_row[group_2_inds].values
+            group_1_data = target_row.iloc[group_1_inds].values
+            group_2_data = target_row.iloc[group_2_inds].values
 
             # Calculate mean difference
             mean_diff = np.mean(group_1_data) - np.mean(group_2_data)
@@ -2457,8 +2503,8 @@ def identify_significant_targets(df_data, df_total_count, sample_groups, sig_met
             return df_sig, None
 
         for idx, target_row in df_data.iterrows():
-            group_1_data = target_row[group_1_inds].values
-            group_2_data = target_row[group_2_inds].values
+            group_1_data = target_row.iloc[group_1_inds].values
+            group_2_data = target_row.iloc[group_2_inds].values
 
             # Perform Mann-Whitney U test
             u_stat, p_val = sp.mannwhitneyu(group_1_data, group_2_data, alternative='two-sided')
@@ -2512,8 +2558,8 @@ def identify_significant_targets(df_data, df_total_count, sample_groups, sig_met
             return df_sig, None
 
         for idx, target_row in df_data.iterrows():
-            group_1_data = target_row[group_1_inds].values
-            group_2_data = target_row[group_2_inds].values
+            group_1_data = target_row.iloc[group_1_inds].values
+            group_2_data = target_row.iloc[group_2_inds].values
 
             t_stat, p_val = sp.ttest_ind(group_1_data, group_2_data, equal_var=False)
 
@@ -2638,10 +2684,10 @@ def identify_significant_targets(df_data, df_total_count, sample_groups, sig_met
 
         for idx, (df_idx, target_row) in enumerate(df_data.iterrows()):
             #check if any values are na
-            group_1_data = target_row[group_1_inds].values / 100 # convert to proportions
-            group_2_data = target_row[group_2_inds].values / 100
+            group_1_data = target_row.iloc[group_1_inds].values / 100 # convert to proportions
+            group_2_data = target_row.iloc[group_2_inds].values / 100
 
-            if target_row[group_1_inds].isna().any() or target_row[group_2_inds].isna().any():
+            if target_row.iloc[group_1_inds].isna().any() or target_row.iloc[group_2_inds].isna().any():
                 res_table_rows.append([
                     np.nanmean(group_1_data)*100, #change back to percents
                     np.nanmean(group_2_data)*100,
@@ -2797,8 +2843,12 @@ def plot_targets_and_heatmap(
 
     sample_groups = []
     for sample_name in df_to_plot.columns:
-        sample_group = sample_df[sample_df["Name"] == sample_name]["group"].values[0]
-        sample_groups.append(sample_group)
+        if sample_name in sample_df['Name'].values:
+            this_sample_group = sample_df[sample_df["Name"] == sample_name]["group"].values[0]
+            sample_groups.append(this_sample_group)
+        else:
+            sample_groups.append('NA')
+
 
     df_sig, df_pvals = identify_significant_targets(df_data=df_to_plot, df_total_count=df_total_count, sample_groups=sample_groups, sig_method_parameters=sig_method_parameters)
 
@@ -2834,7 +2884,7 @@ def plot_targets_and_heatmap(
             return letter_to_int["+"]
         return letter_to_int["default"]
 
-    df_mapped = target_plot_df.applymap(lambda x: get_int_from_letter(x))
+    df_mapped = target_plot_df.apply(lambda col: col.map(get_int_from_letter))
 
     # Create the figure and gridspec
     fig = plt.figure(figsize=(fig_width, fig_height))
@@ -2941,8 +2991,21 @@ def plot_targets_and_heatmap(
                     )
 
     # Create a custom legend under the first heatmap
+    
+    # Create a custom legend under the first heatmap
     ax_legend = fig.add_subplot(gs[1, 0])
     ax_legend.axis("off")
+
+    # Only show A, T, C, G, and collapse + and - to 'Ins/Del'
+    legend_labels = ['A', 'T', 'C', 'G', 'Ins/Del']
+    legend_colors = [
+        color_mapping['A'],
+        color_mapping['T'],
+        color_mapping['C'],
+        color_mapping['G'],
+        color_mapping['+'],  # '+' and '-' are the same color
+    ]
+
     patches = [
         plt.plot(
             [],
@@ -2951,22 +3014,22 @@ def plot_targets_and_heatmap(
             ms=10,
             ls="",
             mec=None,
-            color=color_mapping[letter],
-            label="{:s}".format(letter),
+            color=legend_colors[i],
+            label=legend_labels[i],
         )[0]
-        for letter in color_mapping
+        for i in range(len(legend_labels))
     ]
 
     if legend_ncol is not None:
-        legend_ncol = legend_ncol
+        legend_ncol_val = legend_ncol
     else:
-        legend_ncol = len(color_mapping)
+        legend_ncol_val = len(legend_labels)
 
     ax_legend.legend(
         handles=patches,
         loc="center",
         title="Target nucleotides",
-        ncol=legend_ncol,
+        ncol=legend_ncol_val,
         bbox_to_anchor=(0.5, 1),
         title_fontsize=legend_title_fontsize,
         fontsize=legend_title_fontsize - 2,
@@ -3119,25 +3182,24 @@ def replot(
             os.makedirs(output_folder, exist_ok=True)
 
     reordered_stats_df = pd.read_csv(reordered_stats_file, sep="\t")
+
+    stats_suffixes = ['_pooled_result_name', '_highest_a_g_pct', '_highest_c_t_pct', '_highest_indel_pct', '_tot_reads']
+    sample_cols_reordered = ['target_id', 'target_name', 'sort_index', 'target_chr', 'target_pos', 'target_seq_no_gaps_with_pam', 'target_seq_no_gaps', 'target_seq_with_gaps', 'target_pam', 'ontarget_name', 'ontarget_sequence', 'matched_region_count', 'matched_region', 'matched_region_id', 'region_anno']
+    # reorder the stats column to the order of the sample file
+    for sample in sample_df["Name"]:
+        for suffix in stats_suffixes:
+                sample_cols_reordered.append(sample + suffix)
+
+    for col in sample_cols_reordered:
+        if col not in reordered_stats_df.columns:
+            raise Exception(f'Cannot find expected column {col} in columns of {reordered_stats_file}')
+
+    reordered_stats_df = reordered_stats_df[sample_cols_reordered]
+
     target_plot_df = create_target_df_for_plotting(reordered_stats_df)
     target_plot_df.index = reordered_stats_df["target_name"]
 
     info("Plotting for " + str(len(reordered_stats_df)) + " targets", {"percent_complete": 20})
-
-    # reorder the stats column to the order of the sample file
-    sample_cols_reordered = []
-    for sample in sample_df["Name"]:
-        for col in reordered_stats_df.columns:
-            if col.startswith(sample):
-                sample_cols_reordered.append(col)
-
-    reordered_cols = []
-    for col in reordered_stats_df.columns:
-        if col not in sample_cols_reordered:
-            reordered_cols.append(col)
-
-    reordered_cols += sample_cols_reordered
-    reordered_stats_df = reordered_stats_df[reordered_cols]
 
     create_plots(
         data_df=reordered_stats_df,
@@ -3148,11 +3210,11 @@ def replot(
         heatmap_fig_height=fig_height,
         heatmap_fig_width=fig_width,
         heatmap_seq_plot_ratio=seq_plot_ratio,
-        heatmap_title_fontsize=title_fontsize,
-        heatmap_y_tick_fontsize=y_tick_fontsize,
-        heatmap_x_tick_fontsize=x_tick_fontsize,
+        title_fontsize=title_fontsize,
+        y_tick_fontsize=y_tick_fontsize,
+        x_tick_fontsize=x_tick_fontsize,
+        legend_title_fontsize=legend_title_fontsize,
         heatmap_nucleotide_fontsize=nucleotide_fontsize,
-        heatmap_legend_fontsize=legend_title_fontsize,
         heatmap_legend_ncol=legend_ncol,
         heatmap_max_value=heatmap_max_value,
         heatmap_min_value=heatmap_min_value,
@@ -3496,6 +3558,8 @@ def main():
         help="Print debug information",
         action="store_true",
     )
+    process_parser.add_argument('--version', action='version',
+                                version=f'%(prog)s {version("CRISPRessoSea")}')
 
     ### Replot
     plot_parser = subparsers.add_parser(
@@ -3529,6 +3593,21 @@ def main():
     )
     plot_parser.add_argument(
         "--fig_height", help="Height of the figure", default=24, type=int
+    )
+    plot_parser.add_argument(
+        "--title_fontsize", help="Font size for the title", default=30, type=int,
+    )
+    plot_parser.add_argument(
+        '--y_tick_fontsize', help="Font size for the y-axis tick labels", default=16, type=int
+    )
+    plot_parser.add_argument(
+        '--x_tick_fontsize', help="Font size for the x-axis tick labels", default=16, type=int
+    )
+    plot_parser.add_argument(
+        '--nucleotide_fontsize', help="Font size for the nucleotide labels", default=14, type=int
+    )
+    plot_parser.add_argument(
+        '--legend_title_fontsize', help="Font size for the legend and axis titles", default=20, type=int
     )
     plot_parser.add_argument(
         "--seq_plot_ratio",
@@ -3578,6 +3657,8 @@ def main():
         help="Print debug information",
         action="store_true",
     )
+    plot_parser.add_argument('--version', action='version',
+                                version=f'%(prog)s {version("CRISPRessoSea")}')
 
     ### MakeGuideFile
     makeguidefile_parser = subparsers.add_parser(
@@ -3647,6 +3728,8 @@ def main():
         help="Print debug information",
         action="store_true",
     )
+    makeguidefile_parser.add_argument('--version', action='version',
+                                version=f'%(prog)s {version("CRISPRessoSea")}')
 
     parser.add_argument(
         "-v",
@@ -3660,6 +3743,8 @@ def main():
         help="Print debug information",
         action="store_true",
     )
+    parser.add_argument('--version', action='version',
+                                version=f'%(prog)s {version("CRISPRessoSea")}')
 
     args = parser.parse_args()
     CRISPRessoShared.set_console_log_level(logger, args.verbosity, args.debug)
@@ -3730,6 +3815,11 @@ def main():
             args.file_prefix,
             fig_height=args.fig_height,
             fig_width=args.fig_width,
+            title_fontsize=args.title_fontsize,
+            y_tick_fontsize=args.y_tick_fontsize,
+            x_tick_fontsize=args.x_tick_fontsize,
+            nucleotide_fontsize=args.nucleotide_fontsize,
+            legend_title_fontsize=args.legend_title_fontsize,
             seq_plot_ratio=args.seq_plot_ratio,
             plot_group_order=plot_group_order,
             dot_plot_ylims=dot_plot_ylims,
