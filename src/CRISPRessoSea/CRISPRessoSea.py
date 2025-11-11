@@ -62,6 +62,7 @@ def process_pools(
     crispresso_base_editor_output=False,
     crispresso_default_min_aln_score=20,
     crispresso_plot_window_size=20,
+    crispresso_ignore_substitutions=False,
     allow_unplaced_chrs=False,
     plot_only_complete_targets=False,
     min_amplicon_coverage=100,
@@ -93,6 +94,7 @@ def process_pools(
     - crispresso_base_editor_output: whether to output base editor plots. If True, base editor plots will be output. If False, base editor plots will not be output.
     - crispresso_default_min_aln_score: the minimum alignment score to use for CRISPResso2. This will be used for CRISPResso2 subruns and corresponds to the parameter --default_min_aln_score. If None, the default value of 20 will be used.
     - crispresso_plot_window_size: the window size to use for CRISPResso2 plots. This will be used for CRISPResso2 subruns and corresponds to the parameter --plot_window_size. If None, the default value of 20 will be used.
+    - crispresso_ignore_substitutions: whether to ignore substitutions when calling reads as modified or unmodified, affecting the 'mod_pct' columns. By default, substitutions are considered when calling reads as modified or unmodified.
     - allow_unplaced_chrs: whether to allow regions to be identified on unplaced chromosomes (chrUn, random, etc).
     - plot_only_complete_targets: whether to plot only targets with data in all samples
     - min_amplicon_coverage: the minimum number of reads required to consider an amplicon
@@ -266,6 +268,7 @@ def process_pools(
             crispresso_base_editor_output=crispresso_base_editor_output,
             crispresso_default_min_aln_score=crispresso_default_min_aln_score,
             crispresso_plot_window_size=crispresso_plot_window_size,
+            crispresso_ignore_substitutions=crispresso_ignore_substitutions,
             fail_on_pooled_fail=fail_on_pooled_fail,
         )
         sample_df.loc[sample_idx, "CRISPRessoPooled_output_folder"] = this_pooled_run
@@ -292,7 +295,7 @@ def process_pools(
             completed_samples.append(sample_name)
 
     aggregated_stats.sort_values(by="sort_index", inplace=True)
-    aggregated_stats.fillna('NA').to_csv(os.path.join(output_folder, "aggregated_stats_all.txt"), sep="\t", index=False)
+    aggregated_stats.to_csv(os.path.join(output_folder, "aggregated_stats_all.txt"), sep="\t", index=False, na_rep='NA')
 
     aggregated_stats["target_id"] = aggregated_stats["target_id"].apply(
         lambda x: x.split(" ")[-1]
@@ -633,15 +636,22 @@ def make_sea_report_from_folder(
         display_name = display_names[name]
         sub_folder = os.path.join("CRISPResso_output", "CRISPRessoPooled_on_" + name)
         crispresso_folder = os.path.join(sea_folder, sub_folder)
-        run_data = CRISPRessoShared.load_crispresso_info(
-            crispresso_info_file_name=os.path.join(
-                crispresso_folder, "CRISPResso2Pooled_info.json"
+        crispresso_info_file_name=os.path.join(crispresso_folder, "CRISPResso2Pooled_info.json")
+        try:
+            run_data = CRISPRessoShared.load_crispresso_info(
+                crispresso_info_file_name=crispresso_info_file_name
             )
-        )
+        except Exception as e: # pandas/json parsing was broken in previous CRISPResso versions.
+            temp_info_file = crispresso_info_file_name + ".tmp.json"
+            sb.run(f"sed '/final_data/,+3d' {crispresso_info_file_name} > {temp_info_file}", shell=True)
+            run_data = CRISPRessoShared.load_crispresso_info(
+                crispresso_info_file_name=temp_info_file
+            )
         if "running_info" not in run_data:
             raise Exception(
                 f"CRISPResso run {sub_folder} has no report. Cannot add to Sea report."
             )
+
 
         this_sub_html_file = sub_folder + ".html"
         if (
@@ -1520,6 +1530,7 @@ def run_crispresso_with_assigned_regions(
     crispresso_base_editor_output=False,
     crispresso_default_min_aln_score=60,
     crispresso_plot_window_size=20,
+    crispresso_ignore_substitutions=False,
     suppress_commandline_output=True,
     fail_on_pooled_fail=False,
 ):
@@ -1538,6 +1549,7 @@ def run_crispresso_with_assigned_regions(
     - crispresso_base_editor_output: whether to output base editor results
     - crispresso_default_min_aln_score: the minimum alignment score for CRISPResso
     - crispresso_plot_window_size: the size of the plot window
+    - crispresso_ignore_substitutions: whether to ignore substitutions in CRISPResso
     - suppress_commandline_output: whether to suppress commandline output from CRISPRessoPooled
     - fail_on_pooled_fail: if true, fail if any pooled CRISPResso run fails. Otherwise, continue even if sub-CRISPResso commands fail.
 
@@ -1564,6 +1576,10 @@ def run_crispresso_with_assigned_regions(
     if crispresso_base_editor_output:
         base_editor_string = " --base_editor_output "
 
+    ignore_substitutions_string = ""
+    if crispresso_ignore_substitutions:
+        ignore_substitutions_string = " --ignore_substitutions "
+
     CRISPResso_output_folder = output_folder + "CRISPRessoPooled_on_" + experiment_name
 
     command = (
@@ -1576,6 +1592,7 @@ def run_crispresso_with_assigned_regions(
         + output_string
         + " --min_reads_to_use_region 1 "
         + base_editor_string 
+        + ignore_substitutions_string
         + " --quantification_window_center " + str(crispresso_quantification_window_center) 
         + " --quantification_window_size " + str(crispresso_quantification_window_size)
         + " --default_min_aln_score " + str(crispresso_default_min_aln_score)
@@ -1631,7 +1648,7 @@ def analyze_run(output_name, crispresso_folder, target_df, region_df):
         target_data = []
         with open(target_summary_file, "w") as fout:
             fout.write(
-                "target_id\ttarget_label\tpooled_result_name\thighest_a_g_pct\thighest_c_t_pct\thighest_indel_pct\ttot_reads\n"
+                "target_id\ttarget_label\tpooled_result_name\thighest_a_g_pct\thighest_c_t_pct\thighest_indel_pct\tmod_pct\ttot_reads\n"
             )
         for idx, row in target_df.iterrows():
             target_id = row["target_id"]
@@ -1648,6 +1665,7 @@ def analyze_run(output_name, crispresso_folder, target_df, region_df):
                 "highest_a_g_pct",
                 "highest_c_t_pct",
                 "highest_indel_pct",
+                "mod_pct",
                 "tot_reads",
             ],
         )
@@ -1688,14 +1706,14 @@ def analyze_run(output_name, crispresso_folder, target_df, region_df):
     #iterate through targets in order and aggregate results
     target_data = []
     with open(target_summary_file, "w") as fout:
-        fout.write("target_id\ttarget_label\tpooled_result_name\thighest_a_g_pct\thighest_c_t_pct\thighest_indel_pct\ttot_reads\n")
+        fout.write("target_id\ttarget_label\tpooled_result_name\thighest_a_g_pct\thighest_c_t_pct\thighest_indel_pct\tmod_pct\ttot_reads\n")
         for idx, row in target_df.iterrows():
             target_id = row["target_id"]
             target_name = row["target_name"]
             if target_id not in target_pooled_results_lookup:
-                fout.write(target_id + "\t" + target_name + "\tNA\tNA\tNA\tNA\n")
+                fout.write(target_id + "\t" + target_name + "\tNA\tNA\tNA\tNA\tNA\tNA\n")
                 target_data.append(
-                    [target_id, target_name, np.nan, np.nan, np.nan, np.nan]
+                    [target_id, target_name, np.nan, np.nan, np.nan, np.nan, np.nan]
                 )
             else:
                 pooled_result_name = target_pooled_results_lookup[target_id]
@@ -1763,6 +1781,12 @@ def analyze_run(output_name, crispresso_folder, target_df, region_df):
                 if not has_valid_c_t:
                     highest_c_t_pct = np.nan
 
+                count_mod = run_info["results"]['alignment_stats']["counts_modified"]['Reference']
+                count_unmod = run_info["results"]['alignment_stats']["counts_unmodified"]['Reference']
+                mod_pct = 0
+                if (count_mod + count_unmod) > 0:
+                    mod_pct = (count_mod / (count_mod + count_unmod)) * 100
+
                 data_to_write = [
                     target_id,
                     target_name,
@@ -1770,6 +1794,7 @@ def analyze_run(output_name, crispresso_folder, target_df, region_df):
                     highest_a_g_pct,
                     highest_c_t_pct,
                     highest_indel_pct,
+                    mod_pct,
                     tot_count,
                 ]
                 fout.write("\t".join(str(x) for x in data_to_write) + "\n")
@@ -1793,6 +1818,7 @@ def analyze_run(output_name, crispresso_folder, target_df, region_df):
             "highest_a_g_pct",
             "highest_c_t_pct",
             "highest_indel_pct",
+            "mod_pct",
             "tot_reads",
         ],
     )
@@ -1815,7 +1841,7 @@ def view_complete_target_summary(output_name):
 
 def plot_heatmap(output_name):
     """
-    Plot a heatmap of the highest_a_g_pct, highest_c_t_pct, and highest_indel_pct for each target
+    Plot a heatmap of the highest_a_g_pct, highest_c_t_pct, highest_indel_pct, and mod_pct for each target
     Data is read from output_name + ".complete_target_summary.txt"
     Plot is written to output_name + ".heatmap.pdf"
 
@@ -1827,7 +1853,7 @@ def plot_heatmap(output_name):
     d.set_index("target_id", inplace=True)
     fig = plt.figure(figsize=(12, 12), dpi=100, facecolor="w", edgecolor="k")
     sns.heatmap(
-        d[["highest_a_g_pct", "highest_c_t_pct", "highest_indel_pct"]].astype(float),
+        d[["highest_a_g_pct", "highest_c_t_pct","highest_indel_pct", "mod_pct"]].astype(float),
         annot=True,
         fmt=".4f",
         cmap="Reds",
@@ -1838,7 +1864,7 @@ def plot_heatmap(output_name):
 
 def plot_heatmap_sub(output_name, target_name):
     """
-    Plot a heatmap of the highest_a_g_pct, highest_c_t_pct, and highest_indel_pct for a specific target
+    Plot a heatmap of the highest_a_g_pct, highest_c_t_pct, highest_indel_pct, and mod_pct for a specific target
     Data is read from output_name + ".complete_target_summary.txt"
     Plot is written to output_name + ".heatmap.pdf"
 
@@ -1852,7 +1878,7 @@ def plot_heatmap_sub(output_name, target_name):
     dsub = d[d["ontarget_name"] == target_name]
     fig = plt.figure(figsize=(6, 6), dpi=100, facecolor="w", edgecolor="k")
     sns.heatmap(
-        dsub[["highest_a_g_pct", "highest_c_t_pct", "highest_indel_pct"]].astype(float),
+        dsub[["highest_a_g_pct", "highest_c_t_pct", "highest_indel_pct", "mod_pct"]].astype(float),
         annot=True,
         fmt=".4f",
         cmap="Reds",
@@ -2012,7 +2038,7 @@ def create_plots(
     dot_plot_ylims=[None, None],
     sig_method_parameters=None,
 ):
-    """For each group, plot the highest_a_g_pct, highest_c_t_pct, highest_indel_pct, and tot_reads for each target
+    """For each group, plot the highest_a_g_pct, highest_c_t_pct, highest_indel_pct, mod_pct, and tot_reads for each target
 
     Args:
         data_df (pd.DataFrame): a dataframe with data for plotting
@@ -2070,6 +2096,11 @@ def create_plots(
             "plot_suffix": "highest_indel_pct",
         },
         {
+            "col_to_plot": "mod_pct",
+            "col_title": "Modified %",
+            "plot_suffix": "mod_pct",
+        },
+        {
             "col_to_plot": "tot_reads",
             "col_title": "Total Reads",
             "plot_suffix": "tot_reads",
@@ -2091,7 +2122,7 @@ def create_plots(
                         cols_to_keep.append(col)
             filtered_data_df = data_df[cols_to_keep]
 
-        # for each type of plot (highest_a_g_pct, highest_c_t_pct, highest_indel_pct, tot_reads)
+        # for each type of plot (highest_a_g_pct, highest_c_t_pct, highest_indel_pct, mod_pct, tot_reads)
         for plot_detail in plot_details:
             col_to_plot = plot_detail["col_to_plot"]
             if group == "all":
@@ -2106,11 +2137,11 @@ def create_plots(
                 file_name = plot_suffix
 
             plot_targets_and_heatmap(
-                sample_df,
-                target_plot_df,
-                filtered_data_df,
-                col_to_plot,
-                col_title,
+                sample_df=sample_df,
+                target_plot_df=target_plot_df,
+                df_data=filtered_data_df,
+                col_to_plot=col_to_plot,
+                df_data_title=col_title,
                 row_annotations=gene_annotations,
                 outfile_name=os.path.join(output_folder, file_name),
                 fig_height=heatmap_fig_height,
@@ -2592,12 +2623,8 @@ def identify_significant_targets(df_data, df_total_count, sample_groups, sig_met
                     df_sig.iloc[idx,group_1_inds] = True
                 else:
                     df_sig.iloc[idx,group_2_inds] = True
-
         res_table_df = res_table_df.merge(df_data, left_index=True, right_index=True)
         return df_sig, res_table_df
-
-
-
 
     elif method == SigMethod.NEG_BINOMIAL:
         """
@@ -2830,7 +2857,7 @@ def plot_targets_and_heatmap(
     if len(cols_to_plot) == 0:
         raise Exception("No columns found in df_data with suffix " + col_to_plot + " in columns: " + str(list(df_data.columns)))
     df_to_plot = df_data[cols_to_plot]
-    df_to_plot.index = df_data['target_name']
+    df_to_plot.index = [df_data['target_name'], df_data['target_id']]
     df_to_plot.columns = [col.replace("_" + col_to_plot, "") for col in cols_to_plot]
 
     #calculate total counts for negative binomial
@@ -2915,6 +2942,9 @@ def plot_targets_and_heatmap(
     # replace y tick lables with target names
     if target_names is not None:
         ax1.set_yticklabels(target_names, rotation=0, fontsize=y_tick_fontsize)
+    else:
+        ax1.set_yticklabels(df_mapped.index, rotation=0, fontsize=y_tick_fontsize)
+
     ax1.set_title("Target sequences", fontsize=title_fontsize)
     ax1.set_ylabel('')
 
@@ -3183,7 +3213,7 @@ def replot(
 
     reordered_stats_df = pd.read_csv(reordered_stats_file, sep="\t")
 
-    stats_suffixes = ['_pooled_result_name', '_highest_a_g_pct', '_highest_c_t_pct', '_highest_indel_pct', '_tot_reads']
+    stats_suffixes = ['_pooled_result_name', '_highest_a_g_pct', '_highest_c_t_pct', '_highest_indel_pct', '_mod_pct', '_tot_reads']
     sample_cols_reordered = ['target_id', 'target_name', 'sort_index', 'target_chr', 'target_pos', 'target_seq_no_gaps_with_pam', 'target_seq_no_gaps', 'target_seq_with_gaps', 'target_pam', 'ontarget_name', 'ontarget_sequence', 'matched_region_count', 'matched_region', 'matched_region_id', 'region_anno']
     # reorder the stats column to the order of the sample file
     for sample in sample_df["Name"]:
@@ -3489,6 +3519,11 @@ def main():
         help="Defines the size of the window extending from the quantification window center to plot. Nucleotides within plot_window_size of the quantification_window_center for each guide are plotted.",
         default=20,
         type=int,
+    )
+    process_parser.add_argument(
+        "--crispresso_ignore_substitutions",
+        help="Ignores substitutions when calling reads as modified or unmodified, affecting the 'mod_pct' columns. By default, substitutions are considered when calling reads as modified or unmodified.",
+        action="store_true",
     )
 
     process_parser.add_argument(
@@ -3914,6 +3949,7 @@ def main():
             crispresso_base_editor_output=args.crispresso_base_editor_output,
             crispresso_default_min_aln_score=args.crispresso_default_min_aln_score,
             crispresso_plot_window_size=args.crispresso_plot_window_size,
+            crispresso_ignore_substitutions=args.crispresso_ignore_substitutions,
             allow_unplaced_chrs=args.allow_unplaced_chrs,
             plot_only_complete_targets=args.plot_only_complete_targets,
             min_amplicon_coverage=args.min_amplicon_coverage,
