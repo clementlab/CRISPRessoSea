@@ -48,6 +48,20 @@ debug = logger.debug
 info = logger.info
 
 
+def load_crispresso_info(crispresso_info_file):
+    try:
+        run_data = CRISPRessoShared.load_crispresso_info(
+            crispresso_info_file_name=crispresso_info_file
+        )
+    except Exception as e: # pandas/json parsing was broken in previous CRISPResso versions.
+        temp_info_file = crispresso_info_file + ".tmp.json"
+        subprocess.run(f"sed '/final_data/,+3d' {crispresso_info_file} > {temp_info_file}", shell=True)
+        run_data = CRISPRessoShared.load_crispresso_info(
+            crispresso_info_file_name=temp_info_file
+        )
+    os.remove(temp_info_file)
+    return run_data
+
 def process_pools(
     args,
     sample_file,
@@ -637,16 +651,7 @@ def make_sea_report_from_folder(
         sub_folder = os.path.join("CRISPResso_output", "CRISPRessoPooled_on_" + name)
         crispresso_folder = os.path.join(sea_folder, sub_folder)
         crispresso_info_file_name=os.path.join(crispresso_folder, "CRISPResso2Pooled_info.json")
-        try:
-            run_data = CRISPRessoShared.load_crispresso_info(
-                crispresso_info_file_name=crispresso_info_file_name
-            )
-        except Exception as e: # pandas/json parsing was broken in previous CRISPResso versions.
-            temp_info_file = crispresso_info_file_name + ".tmp.json"
-            sb.run(f"sed '/final_data/,+3d' {crispresso_info_file_name} > {temp_info_file}", shell=True)
-            run_data = CRISPRessoShared.load_crispresso_info(
-                crispresso_info_file_name=temp_info_file
-            )
+        run_data = load_crispresso_info(crispresso_info_file_name)
         if "running_info" not in run_data:
             raise Exception(
                 f"CRISPResso run {sub_folder} has no report. Cannot add to Sea report."
@@ -927,7 +932,7 @@ def run_initial_demux(
     crispresso_run_is_complete = False
     if os.path.exists(CRISPResso_output_folder):
         try:
-            crispresso_pooled_info = CRISPRessoShared.load_crispresso_info(
+            crispresso_pooled_info = load_crispresso_info(
                 crispresso_info_file_path=CRISPResso_output_folder
                 + "/CRISPResso2Pooled_info.json"
             )
@@ -1606,7 +1611,7 @@ def run_crispresso_with_assigned_regions(
     crispresso_run_is_complete = False
     if os.path.exists(CRISPResso_output_folder):
         try:
-            crispresso_pooled_info = CRISPRessoShared.load_crispresso_info(
+            crispresso_pooled_info = load_crispresso_info(
                 crispresso_info_file_path=CRISPResso_output_folder + "/CRISPResso2Pooled_info.json"
             )
             if "end_time" in crispresso_pooled_info["running_info"]:
@@ -1671,7 +1676,7 @@ def analyze_run(output_name, crispresso_folder, target_df, region_df):
         )
         return target_summary_file, target_data_df
 
-    pooled_info = CRISPRessoShared.load_crispresso_info(
+    pooled_info = load_crispresso_info(
         crispresso_info_file_path=crispresso_folder + "/CRISPResso2Pooled_info.json"
     )
     pooled_results = pooled_info["results"]["good_region_folders"] # dict of result_name to CRISPResso folder
@@ -3485,6 +3490,11 @@ def main():
         default=None,
     )
     process_parser.add_argument(
+        "--aggregation_method",
+        help="Method for aggregating analysis outputs. Options are 'mod_pct' (takes the CRISPResso modification percentage), 'max_a_g' (for A>G base editors), 'max_c_t' (for C>T base editors), 'max_indel' (for indels), or 'all' (all comparisons are reported).",
+        default='mod_pct'
+    )
+    process_parser.add_argument(
         "-p",
         "--n_processes",
         help='Number of processes to use. Set to "max" to use all available processors.',
@@ -3622,6 +3632,11 @@ def main():
         "--reordered_sample_file",
         help="Reordered_sample_file - path to the sample file with headers: Name, group, fastq_r1, fastq_r2 (group is always optional, fastq_r2 is optional for single-end reads)",
         required=True,
+    )
+    plot_parser.add_argument(
+        "--aggregation_method",
+        help="Method for aggregating analysis outputs. Options are 'mod_pct' (takes the CRISPResso modification percentage), 'max_a_g' (for A>G base editors), 'max_c_t' (for C>T base editors), 'max_indel' (for indels), or 'all' (all comparisons are reported).",
+        default='mod_pct'
     )
     plot_parser.add_argument(
         "--fig_width", help="Width of the figure", default=24, type=int
