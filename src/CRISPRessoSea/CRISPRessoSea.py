@@ -48,16 +48,16 @@ debug = logger.debug
 info = logger.info
 
 
-def load_crispresso_info(crispresso_info_file):
+def load_crispresso_info(crispresso_info_file_path):
     try:
         run_data = CRISPRessoShared.load_crispresso_info(
-            crispresso_info_file_name=crispresso_info_file
+            crispresso_info_file_path=crispresso_info_file_path
         )
     except Exception as e: # pandas/json parsing was broken in previous CRISPResso versions.
-        temp_info_file = crispresso_info_file + ".tmp.json"
-        subprocess.run(f"sed '/final_data/,+3d' {crispresso_info_file} > {temp_info_file}", shell=True)
+        temp_info_file = crispresso_info_file_path + ".tmp.json"
+        subprocess.run(f"sed '/final_data/,+3d' {crispresso_info_file_path} > {temp_info_file}", shell=True)
         run_data = CRISPRessoShared.load_crispresso_info(
-            crispresso_info_file_name=temp_info_file
+            crispresso_info_file_path=temp_info_file
         )
     os.remove(temp_info_file)
     return run_data
@@ -650,8 +650,8 @@ def make_sea_report_from_folder(
         display_name = display_names[name]
         sub_folder = os.path.join("CRISPResso_output", "CRISPRessoPooled_on_" + name)
         crispresso_folder = os.path.join(sea_folder, sub_folder)
-        crispresso_info_file_name=os.path.join(crispresso_folder, "CRISPResso2Pooled_info.json")
-        run_data = load_crispresso_info(crispresso_info_file_name)
+        crispresso_info_file_path=os.path.join(crispresso_folder, "CRISPResso2Pooled_info.json")
+        run_data = load_crispresso_info(crispresso_info_file_path)
         if "running_info" not in run_data:
             raise Exception(
                 f"CRISPResso run {sub_folder} has no report. Cannot add to Sea report."
@@ -933,8 +933,7 @@ def run_initial_demux(
     if os.path.exists(CRISPResso_output_folder):
         try:
             crispresso_pooled_info = load_crispresso_info(
-                crispresso_info_file_path=CRISPResso_output_folder
-                + "/CRISPResso2Pooled_info.json"
+                crispresso_info_file_path=CRISPResso_output_folder + "/CRISPResso2Pooled_info.json"
             )
             if (
                 "demultiplexing_genome_only_regions"
