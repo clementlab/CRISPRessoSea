@@ -251,7 +251,7 @@ CRISPRessoSea requires two main input files: a **target file** and a **sample (e
 
 ### Target File
 This file provides information about each target profiled in the amplicon sequencing experiment. Targets can include a combination of on- and off-targets. Targets will be grouped by the 'Guide' column in plots. Information for each target is provided as a row in this table.
-If the off-target sequences or locations are not known, this file can be generated using the `MakeGuideFile' command above.
+If the off-target sequences or locations are not known, this file can be generated using the `MakeGuideFile' command above. Example: [guides.demo.txt](https://raw.githubusercontent.com/clementlab/CRISPRessoSea/refs/heads/main/demo/make_demo/small_demo/CRISPRessoSea_demo/guides.demo.txt).
 
 **Required columns:**
 
@@ -285,7 +285,7 @@ EMX1	EMX_OT2 GGCCTTGTTCACATATAACT	AGG	1	chr1:+5678
 ---
 
 ### Sample File
-This file lists all sequencing samples to be analyzed in a CRISPRessoSea run. Each row specifies a sample name, the path to its sequencing data (FASTQ files), and optionally its experimental group and other metadata.
+This file lists all sequencing samples to be analyzed in a CRISPRessoSea run. Each row specifies a sample name, the path to its sequencing data (FASTQ files), and optionally its experimental group and other metadata. Example: [samples.demo.txt](https://raw.githubusercontent.com/clementlab/CRISPRessoSea/refs/heads/main/demo/make_demo/small_demo/CRISPRessoSea_demo/samples.demo.txt).
 
 **Required columns:**
 
