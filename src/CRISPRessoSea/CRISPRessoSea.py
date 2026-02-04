@@ -59,8 +59,124 @@ def load_crispresso_info(crispresso_info_file_path):
         run_data = CRISPRessoShared.load_crispresso_info(
             crispresso_info_file_path=temp_info_file
         )
-    os.remove(temp_info_file)
+        os.remove(temp_info_file)
     return run_data
+
+class SigMethod(Enum):
+    NONE = 0
+    HARD_CUTOFF = 1
+    MEAN_DIFF = 2
+    T_TEST = 3
+    MANN_WHITNEY = 4
+    NEG_BINOMIAL = 5
+
+def parse_sig_method_parameters(sig_method_parameter_string, group_labels=None):
+    """
+    Parse the significance method parameters from a string or None.
+    """
+    significance_error_string = "Error in parsing sig_method_parameters value '"+sig_method_parameter_string+"': "
+    significance_info_string = "Please provide a significance method description in the form of:\n\tnone\n\thard_cutoff,cutoff\n\tmean_diff,group1,group2,cutoff\n\tt_test,group1,group2,alpha\n\tmann_whitney,group1,group2,alpha (note that the scipy mannwhitneyu implementation performs poorly with fewer than 4 samples in a class)\n\tneg_binomial,group1,group2,alpha\n"
+
+    if sig_method_parameter_string is None or sig_method_parameter_string.strip() == "":
+        return {
+            'method': SigMethod.NONE,
+        }
+    
+    parameter_els = sig_method_parameter_string.split(",")
+    sig_method_parameters = {}
+    if parameter_els[0].lower() == "none":
+        return {
+            'method': SigMethod.NONE,
+        }
+    elif parameter_els[0].lower() == "hard_cutoff" or parameter_els[0].lower() == "hardcutoff" or parameter_els[0].lower() == "hc":
+        sig_method_parameters['method'] = SigMethod.HARD_CUTOFF
+        if len(parameter_els) < 2:
+            raise ValueError(significance_error_string + "Hard cutoff method requires a cutoff value.\n" + significance_info_string)
+        try:
+            sig_method_parameters['cutoff'] = float(parameter_els[1])
+        except ValueError:
+            raise ValueError(significance_error_string + "Cutoff value must be a number.")
+    elif parameter_els[0].lower() == "mean_diff":
+        sig_method_parameters['method'] = SigMethod.MEAN_DIFF
+        if len(parameter_els) < 3:
+            raise ValueError(significance_error_string + "Mean Difference method requires group_1, group_2, and cutoff values.\n" + significance_info_string)
+        if group_labels is None or parameter_els[1] not in group_labels or parameter_els[2] not in group_labels:
+            raise ValueError(significance_error_string + f"Groups {parameter_els[1]} and {parameter_els[2]} must be in the provided group labels: {group_labels}.")
+        sig_method_parameters['group_1'] = parameter_els[1]
+        sig_method_parameters['group_2'] = parameter_els[2]
+        try:
+            sig_method_parameters['cutoff'] = float(parameter_els[3]) if len(parameter_els) > 3 else 0.05
+        except ValueError:
+            raise ValueError(significance_error_string + "Cutoff value must be a number.")
+    elif parameter_els[0].lower() == "mann_whitney" or parameter_els[0].lower() == "mw":
+        sig_method_parameters['method'] = SigMethod.MANN_WHITNEY
+        if len(parameter_els) < 4:
+            raise ValueError(significance_error_string + "Mann-Whitney method requires group_1, group_2, and alpha values.\n" + significance_info_string)
+        if group_labels is None or parameter_els[1] not in group_labels or parameter_els[2] not in group_labels:
+            raise ValueError(significance_error_string + f"Groups {parameter_els[1]} and {parameter_els[2]} must be in the provided group labels: {group_labels}.")
+        sig_method_parameters['group_1'] = parameter_els[1]
+        sig_method_parameters['group_2'] = parameter_els[2]
+        try:
+            sig_method_parameters['alpha'] = float(parameter_els[3]) if len(parameter_els) > 3 else 0.05
+        except ValueError:
+            raise ValueError(significance_error_string + "Alpha value must be a number.")
+    elif parameter_els[0].lower() == "t_test" or parameter_els[0].lower() == "ttest" or parameter_els[0].lower() == "t":
+        sig_method_parameters['method'] = SigMethod.T_TEST
+        if len(parameter_els) < 4:
+            raise ValueError(significance_error_string + "T-test method requires group_1, group_2, and alpha values.\n" + significance_info_string)
+        if group_labels is None or parameter_els[1] not in group_labels or parameter_els[2] not in group_labels:
+            raise ValueError(significance_error_string + f"Groups {parameter_els[1]} and {parameter_els[2]} must be in the provided group labels: {group_labels}.")
+        sig_method_parameters['group_1'] = parameter_els[1]
+        sig_method_parameters['group_2'] = parameter_els[2]
+        try:
+            sig_method_parameters['alpha'] = float(parameter_els[3]) if len(parameter_els) > 3 else 0.05
+        except ValueError:
+            raise ValueError(significance_error_string + "Alpha value must be a number.")
+    elif parameter_els[0].lower() == "neg_binomial" or parameter_els[0].lower() == "nbinom" or parameter_els[0].lower() == "nb":
+        sig_method_parameters['method'] = SigMethod.NEG_BINOMIAL
+        if len(parameter_els) < 4:
+            raise ValueError(significance_error_string + "Negative Binomial method requires group_1, group_2, and alpha values.\n" + significance_info_string)
+        if group_labels is None or parameter_els[1] not in group_labels or parameter_els[2] not in group_labels:
+            raise ValueError(significance_error_string + f"Groups {parameter_els[1]} and {parameter_els[2]} must be in the provided group labels: {group_labels}.")
+        sig_method_parameters['group_1'] = parameter_els[1]
+        sig_method_parameters['group_2'] = parameter_els[2]
+        try:
+            sig_method_parameters['alpha'] = float(parameter_els[3]) if len(parameter_els) > 3 else 0.05
+        except ValueError:
+            raise ValueError(significance_error_string + "Alpha value must be a number.")
+    else:
+        raise ValueError(significance_error_string + f"Unknown significance method: {parameter_els[0]}. {significance_info_string}")
+    
+    return sig_method_parameters
+
+class AggMethod(Enum):
+    ALL = 0
+    MOD_PCT = 1
+    MAX_AG = 2
+    MAX_CT = 3
+    MAX_INDEL = 4
+
+def parse_agg_method_parameters(agg_method_parameter_string):
+    """
+    Parse the aggregation method parameters from a string or None.
+
+    Default is 'mod_pct'.
+    """
+
+    if agg_method_parameter_string is None or agg_method_parameter_string.strip() == "":
+        return [AggMethod.MOD_PCT]
+    elif agg_method_parameter_string.lower() == "mod_pct" or agg_method_parameter_string.lower() == "modpct":
+        return [AggMethod.MOD_PCT]
+    elif agg_method_parameter_string.lower() == "max_ag" or agg_method_parameter_string.lower() == "maxag" or agg_method_parameter_string.lower() == 'ag':
+        return [AggMethod.MAX_AG]
+    elif agg_method_parameter_string.lower() == "max_ct" or agg_method_parameter_string.lower() == "maxct" or agg_method_parameter_string.lower() == 'ct':
+        return [AggMethod.MAX_CT]
+    elif agg_method_parameter_string.lower() == "max_indel" or agg_method_parameter_string.lower() == "maxindel":
+        return [AggMethod.MAX_INDEL]
+    elif agg_method_parameter_string.lower() == "all":
+        return [AggMethod.MOD_PCT, AggMethod.MAX_AG, AggMethod.MAX_CT, AggMethod.MAX_INDEL]
+    
+    return [SigMethod.MOD_PCT]
 
 def process_pools(
     args,
@@ -87,6 +203,7 @@ def process_pools(
     fail_on_pooled_fail=False,
     plot_group_order=None,
     sig_method_parameters=None,
+    agg_methods=[],
 ):
     """
     Discover amplicons and analyze sample editing at amplicons. This is the main entrypoint for this program.
@@ -119,6 +236,7 @@ def process_pools(
     - fail_on_pooled_fail: if true, fail if any pooled CRISPResso run fails. Otherwise, continue even if sub-CRISPResso commands fail.
     - plot_group_order: the order of groups to plot. If None, the default order will be used. This is a list of strings.
     - sig_method_parameters: the parameters to use for the significance method. 
+    - agg_methods: list of aggregation methods to plot (e.g., ['max_ag', 'max_indel'])
     """
 
     log_filename = os.path.join(output_folder, "CRISPRessoSea_RUNNING_LOG.txt")
@@ -343,7 +461,8 @@ def process_pools(
         file_prefix=None,
         crispresso2_info=crispresso2_info,
         plot_group_order=plot_group_order,
-        sig_method_parameters=sig_method_parameters
+        sig_method_parameters=sig_method_parameters,
+        agg_methods=agg_methods,
     )
     # Update crispresso2_info fields that depend on sample_df
     crispresso2_info["results"]["samples"] = [
@@ -1617,7 +1736,7 @@ def run_crispresso_with_assigned_regions(
                 crispresso_run_is_complete = True
                 info("CRISPResso output already exists for sample " + experiment_name + ", skipping CRISPResso run")
         except:
-            raise Exception("failed!")
+            raise Exception("CRISPRessoPooled run found at " + CRISPResso_output_folder + " but could not be loaded. Please check the output folder for errors.")
 
     if not crispresso_run_is_complete:
         info("Aligning reads to the genome to find amplicon locations")
@@ -1625,8 +1744,7 @@ def run_crispresso_with_assigned_regions(
         try:
             subprocess.run(command, shell=True, check=True)
         except:
-            info("Failed to run CRISPRessoPooled for sample " + experiment_name)
-            return None
+            raise Exception("Failed to run CRISPRessoPooled for sample " + experiment_name)
 
     return CRISPResso_output_folder
 
@@ -1856,6 +1974,13 @@ def plot_heatmap(output_name):
     d.dropna(inplace=True)
     d.set_index("target_id", inplace=True)
     fig = plt.figure(figsize=(12, 12), dpi=100, facecolor="w", edgecolor="k")
+    print('DEBUG 1977')
+    print("Heatmap data shape:", d.shape)
+    print("Heatmap head:")
+    print(d.head())
+    if d.shape[0] == 0 or d.shape[1] == 0:
+        logger.warning("No data available for heatmap; skipping plot at " + output_name + ".heatmap.pdf.")
+        return
     sns.heatmap(
         d[["highest_a_g_pct", "highest_c_t_pct","highest_indel_pct", "mod_pct"]].astype(float),
         annot=True,
@@ -2040,7 +2165,10 @@ def create_plots(
     heatmap_min_value=None,
     plot_group_order=None,
     dot_plot_ylims=[None, None],
+    dot_plot_fig_height=6,
+    dot_plot_fig_width=20,
     sig_method_parameters=None,
+    agg_methods=[AggMethod.MOD_PCT],
 ):
     """For each group, plot the highest_a_g_pct, highest_c_t_pct, highest_indel_pct, mod_pct, and tot_reads for each target
 
@@ -2067,7 +2195,10 @@ def create_plots(
         heatmap_min_value (float, optional): the minimum value for the heatmap color scale (Defaults to None)
         plot_group_order (list, optional): the order of the groups to plot (Defaults to None)
         dot_plot_ylims (list, optional): the y-axis limits [min,max] for the dot plot (Defaults to [None, None])
+        dot_plot_fig_height (int, optional): the height of the dot plot (Defaults to 6)
+        dot_plot_fig_width (int, optional): the width of the dot plot (Defaults to 20)
         sig_method_parameters (dict, optional): parameters for the significance method (Defaults to None)
+        agg_methods (list, optional): list of aggregation methods used (Defaults to ['mod_pct'])
 
     Returns:
         crispresso2_info with updated information about the added plot
@@ -2085,31 +2216,39 @@ def create_plots(
 
     plot_details = [
         {
-            "col_to_plot": "highest_a_g_pct",
-            "col_title": "Highest A->G %",
-            "plot_suffix": "highest_a_g_pct",
-        },
-        {
-            "col_to_plot": "highest_c_t_pct",
-            "col_title": "Highest C->T %",
-            "plot_suffix": "highest_c_t_pct",
-        },
-        {
-            "col_to_plot": "highest_indel_pct",
-            "col_title": "Highest Indel %",
-            "plot_suffix": "highest_indel_pct",
-        },
-        {
-            "col_to_plot": "mod_pct",
-            "col_title": "Modified %",
-            "plot_suffix": "mod_pct",
-        },
-        {
             "col_to_plot": "tot_reads",
             "col_title": "Total Reads",
             "plot_suffix": "tot_reads",
         },
     ]
+    if AggMethod.MAX_AG in agg_methods:
+        plot_details.append(
+        {
+            "col_to_plot": "highest_a_g_pct",
+            "col_title": "Highest A->G %",
+            "plot_suffix": "highest_a_g_pct",
+        })
+    if AggMethod.MAX_CT in agg_methods:
+        plot_details.append(
+        {
+            "col_to_plot": "highest_c_t_pct",
+            "col_title": "Highest C->T %",
+            "plot_suffix": "highest_c_t_pct",
+        })
+    if AggMethod.MAX_INDEL in agg_methods:
+        plot_details.append(
+        {
+            "col_to_plot": "highest_indel_pct",
+            "col_title": "Highest Indel %",
+            "plot_suffix": "highest_indel_pct",
+        })
+    if AggMethod.MOD_PCT in agg_methods:
+        plot_details.append(
+        {
+            "col_to_plot": "mod_pct",
+            "col_title": "Modified %",
+            "plot_suffix": "mod_pct",
+        })
 
     for group in ["all", *groups]:
         cols_to_plot = [x["col_to_plot"] for x in plot_details]
@@ -2184,6 +2323,8 @@ def create_plots(
                     output_folder,
                     plot_group_order=plot_group_order,
                     dot_plot_ylims=dot_plot_ylims,
+                    dot_plot_fig_height=dot_plot_fig_height,
+                    dot_plot_fig_width=dot_plot_fig_width,
                     title_fontsize=title_fontsize,
                     y_tick_fontsize=y_tick_fontsize,
                     x_tick_fontsize=x_tick_fontsize,
@@ -2208,7 +2349,7 @@ def create_plots(
 
 # Function to melt DataFrame and plot dot plot
 def plot_dot_plot(df, value_suffix, plot_title, file_prefix, sample_df, output_folder, plot_group_order=None, dot_plot_ylims=[None, None], 
-                  title_fontsize=20, y_tick_fontsize=16, x_tick_fontsize=16, legend_title_fontsize=18):
+                  dot_plot_fig_height=6, dot_plot_fig_width=20, title_fontsize=20, y_tick_fontsize=16, x_tick_fontsize=16, legend_title_fontsize=18):
     """
     Plots a dot plot showing average editing rate for each group
 
@@ -2221,6 +2362,8 @@ def plot_dot_plot(df, value_suffix, plot_title, file_prefix, sample_df, output_f
         output_folder (str): Folder to save the output plot
         plot_group_order (list, optional): Order of groups to plot. If None, groups will be sorted alphabetically.
         dot_plot_ylims (list, optional): Y-axis limits [min,max] for the plot. Default is [None, None], which means auto-scaling.
+        dot_plot_fig_height (int, optional): Height of the dot plot figure. Default is 6.
+        dot_plot_fig_width (int, optional): Width of the dot plot figure. Default is 20.
         title_fontsize (int, optional): Font size for the plot title. Default is 20.
         y_tick_fontsize (int, optional): Font size for the y-axis tick labels and legend labels. Default is 16.
         x_tick_fontsize (int, optional): Font size for the x-axis tick labels. Default is 16.
@@ -2249,7 +2392,7 @@ def plot_dot_plot(df, value_suffix, plot_title, file_prefix, sample_df, output_f
     # 1_Fs2_OFF1  guide1      sample1  0.5
 
     if group_counts.shape[0] <= 1: # if only one group (or none)
-        plt.figure(figsize=(20, 6))
+        plt.figure(figsize=(dot_plot_fig_width, dot_plot_fig_height))
         ax = sns.stripplot(
             data=melted_df,
             x="target_id",
@@ -2304,7 +2447,7 @@ def plot_dot_plot(df, value_suffix, plot_title, file_prefix, sample_df, output_f
                 melted_df_with_group['group'], categories=plot_group_order, ordered=True
         )
 
-        plt.figure(figsize=(20, 6))
+        plt.figure(figsize=(dot_plot_fig_width, dot_plot_fig_height))
         sns.stripplot(
                 data=melted_df_with_group,
                 x="target_id",
@@ -2352,92 +2495,6 @@ def plot_dot_plot(df, value_suffix, plot_title, file_prefix, sample_df, output_f
         plt.savefig(outfile_name + ".png", bbox_inches="tight")
         plt.close()
 
-class SigMethod(Enum):
-    NONE = 0
-    HARD_CUTOFF = 1
-    MEAN_DIFF = 2
-    T_TEST = 3
-    MANN_WHITNEY = 4
-    NEG_BINOMIAL = 5
-
-def parse_sig_method_parameters(sig_method_parameter_string, group_labels=None):
-    """
-    Parse the significance method parameters from a string or None.
-    """
-    significance_error_string = "Error in parsing sig_method_parameters value '"+sig_method_parameter_string+"': "
-    significance_info_string = "Please provide a significance method description in the form of:\n\tnone\n\thard_cutoff,cutoff\n\tmean_diff,group1,group2,cutoff\n\tt_test,group1,group2,alpha\n\tmann_whitney,group1,group2,alpha\n\tneg_binomial,group1,group2,alpha\n"
-
-    if sig_method_parameter_string is None or sig_method_parameter_string.strip() == "":
-        return {
-            'method': SigMethod.NONE,
-        }
-    
-    parameter_els = sig_method_parameter_string.split(",")
-    sig_method_parameters = {}
-    if parameter_els[0].lower() == "none":
-        return {
-            'method': SigMethod.NONE,
-        }
-    elif parameter_els[0].lower() == "hard_cutoff" or parameter_els[0].lower() == "hardcutoff" or parameter_els[0].lower() == "hc":
-        sig_method_parameters['method'] = SigMethod.HARD_CUTOFF
-        if len(parameter_els) < 2:
-            raise ValueError(significance_error_string + "Hard cutoff method requires a cutoff value.\n" + significance_info_string)
-        try:
-            sig_method_parameters['cutoff'] = float(parameter_els[1])
-        except ValueError:
-            raise ValueError(significance_error_string + "Cutoff value must be a number.")
-    elif parameter_els[0].lower() == "mean_diff":
-        sig_method_parameters['method'] = SigMethod.MEAN_DIFF
-        if len(parameter_els) < 3:
-            raise ValueError(significance_error_string + "Mean Difference method requires group_1, group_2, and cutoff values.\n" + significance_info_string)
-        if group_labels is None or parameter_els[1] not in group_labels or parameter_els[2] not in group_labels:
-            raise ValueError(significance_error_string + f"Groups {parameter_els[1]} and {parameter_els[2]} must be in the provided group labels: {group_labels}.")
-        sig_method_parameters['group_1'] = parameter_els[1]
-        sig_method_parameters['group_2'] = parameter_els[2]
-        try:
-            sig_method_parameters['cutoff'] = float(parameter_els[3]) if len(parameter_els) > 3 else 0.05
-        except ValueError:
-            raise ValueError(significance_error_string + "Cutoff value must be a number.")
-    elif parameter_els[0].lower() == "mann_whitney" or parameter_els[0].lower() == "mw":
-        sig_method_parameters['method'] = SigMethod.MANN_WHITNEY
-        if len(parameter_els) < 4:
-            raise ValueError(significance_error_string + "Mann-Whitney method requires group_1, group_2, and alpha values.\n" + significance_info_string)
-        if group_labels is None or parameter_els[1] not in group_labels or parameter_els[2] not in group_labels:
-            raise ValueError(significance_error_string + f"Groups {parameter_els[1]} and {parameter_els[2]} must be in the provided group labels: {group_labels}.")
-        sig_method_parameters['group_1'] = parameter_els[1]
-        sig_method_parameters['group_2'] = parameter_els[2]
-        try:
-            sig_method_parameters['alpha'] = float(parameter_els[3]) if len(parameter_els) > 3 else 0.05
-        except ValueError:
-            raise ValueError(significance_error_string + "Alpha value must be a number.")
-    elif parameter_els[0].lower() == "t_test" or parameter_els[0].lower() == "ttest" or parameter_els[0].lower() == "t":
-        sig_method_parameters['method'] = SigMethod.T_TEST
-        if len(parameter_els) < 4:
-            raise ValueError(significance_error_string + "T-test method requires group_1, group_2, and alpha values.\n" + significance_info_string)
-        if group_labels is None or parameter_els[1] not in group_labels or parameter_els[2] not in group_labels:
-            raise ValueError(significance_error_string + f"Groups {parameter_els[1]} and {parameter_els[2]} must be in the provided group labels: {group_labels}.")
-        sig_method_parameters['group_1'] = parameter_els[1]
-        sig_method_parameters['group_2'] = parameter_els[2]
-        try:
-            sig_method_parameters['alpha'] = float(parameter_els[3]) if len(parameter_els) > 3 else 0.05
-        except ValueError:
-            raise ValueError(significance_error_string + "Alpha value must be a number.")
-    elif parameter_els[0].lower() == "neg_binomial" or parameter_els[0].lower() == "nbinom" or parameter_els[0].lower() == "nb":
-        sig_method_parameters['method'] = SigMethod.NEG_BINOMIAL
-        if len(parameter_els) < 4:
-            raise ValueError(significance_error_string + "Negative Binomial method requires group_1, group_2, and alpha values.\n" + significance_info_string)
-        if group_labels is None or parameter_els[1] not in group_labels or parameter_els[2] not in group_labels:
-            raise ValueError(significance_error_string + f"Groups {parameter_els[1]} and {parameter_els[2]} must be in the provided group labels: {group_labels}.")
-        sig_method_parameters['group_1'] = parameter_els[1]
-        sig_method_parameters['group_2'] = parameter_els[2]
-        try:
-            sig_method_parameters['alpha'] = float(parameter_els[3]) if len(parameter_els) > 3 else 0.05
-        except ValueError:
-            raise ValueError(significance_error_string + "Alpha value must be a number.")
-    else:
-        raise ValueError(significance_error_string + f"Unknown significance method: {parameter_els[0]}. {significance_info_string}")
-    
-    return sig_method_parameters
 
 def identify_significant_targets(df_data, df_total_count, sample_groups, sig_method_parameters):
     """
@@ -2983,6 +3040,7 @@ def plot_targets_and_heatmap(
         yticklabels=False,
         vmin=df_data_heat_min,
         vmax=df_data_heat_max,
+        annot_kws={"fontsize": nucleotide_fontsize},
         cbar_kws={"orientation": "vertical", "pad": cbar_pad},
     )
     ax_heat.collections[0].cmap.set_bad("0.7")
@@ -3182,9 +3240,12 @@ def replot(
     legend_ncol=None,
     plot_group_order=None,
     dot_plot_ylims=[None, None],
+    dot_plot_fig_width=20,
+    dot_plot_fig_height=6,
     heatmap_max_value=None,
     heatmap_min_value=None,
     sig_method_parameters=None,
+    agg_methods=[AggMethod.MOD_PCT],
 ):
     """
     Replot a completed analysis using a reordered target file
@@ -3204,9 +3265,13 @@ def replot(
     - legend_title_fontsize: the fontsize of the legend title for the heatmap
     - legend_ncol: the number of columns in the legend for the heatmap (if None, each value legend value will have a columns)
     - plot_group_order: the order of the groups to plot (if None, the groups will be sorted alphabetically)
+    - dot_plot_ylims: the y-axis limits for the dot plots [ymin, ymax] (if None, the limits will be determined automatically)
+    - dot_plot_fig_width: the width of the dot plot figures
+    - dot_plot_fig_height: the height of the dot plot figures
     - heatmap_max_value: the maximum value for the heatmap color scale (if None, the maximum value will be determined automatically)
     - heatmap_min_value: the minimum value for the heatmap color scale (if None, the minimum value will be determined automatically)
     - sig_method_parameters: parameters for the significance method (if None, no significance will be calculated)
+    - agg_methods: list of aggregation methods to plot (e.g., ['max_ag', 'max_indel'])
     """
 
     sample_df = parse_sample_file(reordered_sample_file)
@@ -3254,7 +3319,10 @@ def replot(
         heatmap_min_value=heatmap_min_value,
         plot_group_order=plot_group_order,
         dot_plot_ylims=dot_plot_ylims,
+        dot_plot_fig_width=dot_plot_fig_width,
+        dot_plot_fig_height=dot_plot_fig_height,
         sig_method_parameters=sig_method_parameters,
+        agg_methods=agg_methods,
     )
 
     info('Replotting complete', {"percent_complete": 100})
@@ -3586,7 +3654,7 @@ def main():
     )
     process_parser.add_argument(
         "--sig_method_parameters",
-        help="Parameters for the significance method in the form of:\n\tnone\n\thard_cutoff,cutoff\n\tmean_diff,group1,group2,cutoff\n\tt_test,group1,group2,alpha\n\tmann_whitney,group1,group2,alpha\n\tneg_binomial,group1,group2,alpha\n",
+        help="Parameters for the significance method in the form of:\n\tnone\n\thard_cutoff,cutoff\n\tmean_diff,group1,group2,cutoff\n\tt_test,group1,group2,alpha\n\tmann_whitney,group1,group2,alpha (note that the scipy mannwhitneyu test performs poorly if either group contains fewer than 4 members)\n\tneg_binomial,group1,group2,alpha\n",
         default=None,
         type=str,
     )
@@ -3672,7 +3740,7 @@ def main():
     )
     plot_parser.add_argument(
         "--sig_method_parameters",
-        help="Parameters for the significance method in the form of:\n\tnone\n\thard_cutoff,cutoff\n\tmean_diff,group1,group2,cutoff\n\tt_test,group1,group2,alpha\n\tmann_whitney,group1,group2,alpha\n\tneg_binomial,group1,group2,alpha\n",
+        help="Parameters for the significance method in the form of:\n\tnone\n\thard_cutoff,cutoff\n\tmean_diff,group1,group2,cutoff\n\tt_test,group1,group2,alpha\n\tmann_whitney,group1,group2,alpha (note that the scipy mannwhitneyu test performs poorly if either group contains fewer than 4 members)\n\tneg_binomial,group1,group2,alpha\n",
         default=None,
         type=str,
     )
@@ -3681,6 +3749,18 @@ def main():
         help="Comma-separated min,max y-axis limits for the dot plot. If None, the y-axis limits will be set automatically.",
         default='None,None',
         type=str,
+    )
+    plot_parser.add_argument(
+        "--dot_plot_fig_width",
+        help="Width of the dot plot figures",
+        default=20,
+        type=int,
+    )
+    plot_parser.add_argument(
+        "--dot_plot_fig_height",
+        help="Height of the dot plot figures",
+        default=6,
+        type=int,
     )
     plot_parser.add_argument(
         "--heatmap_max_value",
@@ -3872,9 +3952,12 @@ def main():
             seq_plot_ratio=args.seq_plot_ratio,
             plot_group_order=plot_group_order,
             dot_plot_ylims=dot_plot_ylims,
+            dot_plot_fig_width=args.dot_plot_fig_width,
+            dot_plot_fig_height=args.dot_plot_fig_height,
             heatmap_max_value=args.heatmap_max_value,
             heatmap_min_value=args.heatmap_min_value,
             sig_method_parameters=sig_method_parameters,
+            agg_methods=parse_agg_method_parameters(args.aggregation_method),
         )
 
     elif args.subcommand == "Process":
@@ -3974,6 +4057,7 @@ def main():
             fail_on_pooled_fail=args.fail_on_pooled_fail,
             plot_group_order=plot_group_order,
             sig_method_parameters=sig_method_parameters,
+            agg_methods=parse_agg_method_parameters(args.aggregation_method),
         )
     else:
         error (

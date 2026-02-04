@@ -244,3 +244,78 @@ options:
                         Verbosity level of output to the console (1-4) 4 is the most verbose (default: 3)
   --debug               Print debug information (default: False)
 ```
+
+## Input format details:
+
+CRISPRessoSea requires two main input files: a **target file** and a **sample (experiment) file**. Both can be provided as tab-delimited `.txt` or `.xlsx` files.
+
+### Target File
+This file provides information about each target profiled in the amplicon sequencing experiment. Targets can include a combination of on- and off-targets. Targets will be grouped by the 'Guide' column in plots. Information for each target is provided as a row in this table.
+If the off-target sequences or locations are not known, this file can be generated using the `MakeGuideFile' command above.
+
+**Required columns:**
+
+| Column   | Description                                                                                  | Example              |
+|----------|----------------------------------------------------------------------------------------------|----------------------|
+| Guide    | Name of the on-target guide (used to group on- and off-targets)                              | CTLA4_site9          |
+| Sequence | Target DNA sequence (without PAM, either on-target or off-target)                            | GGACTGAGGGCCATGGACAC |
+| PAM      | Protospacer Adjacent Motif sequence of this target                                           | GGG                  |
+| #MM      | Number of mismatches between the on-target and this target (0 for on-target)                 | 0                    |
+| Locus    | Genomic location in the format `chr:pos`, `chr:+pos`, or `chr:-pos` for strand information   | chr1:+203870828      |
+
+**Optional columns:**
+
+| Column         | Description                                                                                                    | Example              |
+|----------------|----------------------------------------------------------------------------------------------------------------|----------------------|
+| Target         | Custom name for the target (used in plots/reports)                                                             | CTLA4_site9_ontarget |
+| Mismatch_info  | Human-readable description of mismatches and bulges (for reference only - not used in computation)             | Mismatches: 0        |
+
+**Notes:**
+- Column names are case-insensitive.
+- All required columns must be present.
+- Additional columns will be ignored.
+
+**Example:**
+```tsv
+Guide	Target  Sequence	PAM	#MM	Locus
+EMX1	EMX_OT1 GGCCTTGTTCACATATAACT	AGG	0	chr1:+2345
+EMX1	EMX_OT2 GGCCTTGTTCACATATAACT	AGG	1	chr1:+5678
+```
+
+---
+
+### Sample File
+This file lists all sequencing samples to be analyzed in a CRISPRessoSea run. Each row specifies a sample name, the path to its sequencing data (FASTQ files), and optionally its experimental group and other metadata.
+
+**Required columns:**
+
+| Column    | Description                                                      |
+|-----------|------------------------------------------------------------------|
+| Name      | Unique name for the sample                                       |
+| fastq_r1  | Path to the R1 FASTQ file for this sample                        |
+
+**Optional columns:**
+
+| Column    | Description                                                      |
+|-----------|------------------------------------------------------------------|
+| fastq_r2  | Path to the R2 FASTQ file (for paired-end reads)                 |
+| group     | Group label for the sample (used for grouping in plots/stats)    |
+
+**Notes:**
+- The `Name` column must be unique for each sample.
+- The `fastq_r2` column is optional and only needed for paired-end data.
+- The `group` column is optional but recommended for group-based analysis and plotting.
+- Additional columns will be ignored.
+
+**Example:**
+```tsv
+Name	fastq_r1	fastq_r2	group
+Sample1	/path/sample1_R1.fq	/path/sample1_R2.fq	Control
+Sample2	/path/sample2_R1.fq	/path/sample2_R2.fq	Treated
+```
+
+---
+
+**See also:**  
+- The parsing logic for these files is implemented in `parse_target_info` and `parse_sample_file` in `CRISPRessoSea.py`.
+- For more details, see the comments in the code or run with the `--help` flag.
