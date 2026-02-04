@@ -964,8 +964,6 @@ def merge_locations(
     total_region_count = region_df.shape[0]
     kept_region_count = len(good_nonoverlapping_regions)
     info("Kept " + str(kept_region_count) + "/" + str(total_region_count) + " regions", {'percent_complete': 20})
-    for region in good_nonoverlapping_regions:
-        debug(region)
     good_nonoverlapping_region_rows = []
     for region in good_nonoverlapping_regions:
         this_region_info = region_info[region]
@@ -1974,13 +1972,6 @@ def plot_heatmap(output_name):
     d.dropna(inplace=True)
     d.set_index("target_id", inplace=True)
     fig = plt.figure(figsize=(12, 12), dpi=100, facecolor="w", edgecolor="k")
-    print('DEBUG 1977')
-    print("Heatmap data shape:", d.shape)
-    print("Heatmap head:")
-    print(d.head())
-    if d.shape[0] == 0 or d.shape[1] == 0:
-        logger.warning("No data available for heatmap; skipping plot at " + output_name + ".heatmap.pdf.")
-        return
     sns.heatmap(
         d[["highest_a_g_pct", "highest_c_t_pct","highest_indel_pct", "mod_pct"]].astype(float),
         annot=True,
