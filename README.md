@@ -261,7 +261,7 @@ If the off-target sequences or locations are not known, this file can be generat
 | Sequence | Target DNA sequence (without PAM, either on-target or off-target)                            | GGACTGAGGGCCATGGACAC |
 | PAM      | Protospacer Adjacent Motif sequence of this target                                           | GGG                  |
 | #MM      | Number of mismatches between the on-target and this target (0 for on-target)                 | 0                    |
-| Locus    | Genomic location in the format `chr:pos`, `chr:+pos`, or `chr:-pos` for strand information   | chr1:+203870828      |
+| Locus    | Genomic location in the format `chr:pos`, `chr:+pos`, or `chr:-pos` for strand information.  | chr1:+203870828      |
 
 **Optional columns:**
 
@@ -274,6 +274,8 @@ If the off-target sequences or locations are not known, this file can be generat
 - Column names are case-insensitive.
 - All required columns must be present.
 - Additional columns will be ignored.
+- Locus strand information is not required or used by the pipeline. The strand-containing format is accepted because it is produced by some upstream tools.
+- The Locus information is used to assign targets to amplicon sequencing sites. This functionality can be disabled using the `--allow_target_match_to_other_region_loc` flag.
 
 **Example:**
 ```tsv

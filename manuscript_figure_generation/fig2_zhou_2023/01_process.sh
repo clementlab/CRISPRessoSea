@@ -1,0 +1,1 @@
+CRISPRessoSea Process -t guides.txt -s Fs2_withgroup.txt -x ~/genomes/Homo_sapiens/UCSC/hg38/Sequence/Bowtie2Index/genome.fa -p 50 --plot_group_order ku,ep,ctl --plot_only_complete_targets -o final --crispresso_ignore_substitutions --crispresso_quantification_window_size 2

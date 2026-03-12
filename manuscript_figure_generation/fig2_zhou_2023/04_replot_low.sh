@@ -1,0 +1,1 @@
+CRISPRessoSea Replot --reordered_stats_file 02_make_agg_stats.ipynb.txt --reordered_sample_file Fs2_withgroup.txt --y_tick_fontsize 21 --x_tick_fontsize 21 --nucleotide_fontsize 21 --fig_height 10 --sig_method_parameters "t_test,ctl,ep,0.05" --dot_plot_ylims 0,0.5

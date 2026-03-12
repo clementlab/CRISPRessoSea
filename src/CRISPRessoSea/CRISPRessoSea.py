@@ -328,17 +328,27 @@ def process_pools(
     display_names = {}
 
     if region_file is not None:
-        region_file_df = pd.read_csv(region_file, sep="\t")
+        region_file_df = pd.read_csv(region_file, sep="\t", header=0)
+        required_cols = ['chr', 'start', 'end']
+        missing_cols = [col for col in required_cols if col.lower() not in region_file_df.columns]
+        if missing_cols:
+            raise ValueError(f"region_file {region_file} is missing required columns: {missing_cols}")
         merged_region_info_file = output_folder + "/region_info.txt"
 
         with open(merged_region_info_file, "w") as fout:
             fout.write('chr\tstart\tend\tregion_count\tseq\n')
-            for region_row in region_file_df.iterrows():
+            for _, region_row in region_file_df.iterrows():
                 region_chr = region_row['chr']
                 region_start = region_row['start']
-                if 'start' in str(region_start).lower():
-                    continue # skip if we got a header row
                 region_end = region_row['end']
+                # skip rows with missing values
+                if pd.isnull(region_chr) or pd.isnull(region_start) or pd.isnull(region_end):
+                    continue
+                try:
+                    region_start = int(region_start)
+                    region_end = int(region_end)
+                except ValueError:
+                    continue  # skip rows with non-integer start/end
                 region_seq_output = subprocess.check_output(
                     f"samtools faidx {genome_file}.fa {region_chr}:{region_start}-{region_end-1}", shell=True,
                 ).decode(sys.stdout.encoding)
