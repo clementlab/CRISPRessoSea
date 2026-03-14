@@ -49,6 +49,8 @@ info = logger.info
 
 
 def load_crispresso_info(crispresso_info_file_path):
+    if not os.path.exists(crispresso_info_file_path):
+        raise Exception("CRISPResso info file not found at " + crispresso_info_file_path)
     try:
         run_data = CRISPRessoShared.load_crispresso_info(
             crispresso_info_file_path=crispresso_info_file_path
@@ -899,12 +901,13 @@ def merge_locations(
     region_df_sub['length'] = region_df_sub['end'] - region_df_sub['start']
     region_df_sub = region_df_sub[region_df_sub['length'] >= min_amplicon_len]
 
-    top_percent_count = int(len(region_df_sub) * top_percent_cutoff)
-    region_df_sub = region_df_sub.head(top_percent_count)
-    info(
-        "Considering top " + str(top_percent_cutoff * 100) + "% of regions (N=" + str(top_percent_count) + "/" + str(region_df.shape[0]) + ") with at least " 
-        + str(region_df_sub["number of reads"].min()) + " reads (mean reads is " + str(region_df_sub["number of reads"].mean()) + ")"
-    )
+    if top_percent_cutoff < 1: # if top_percent_cutoff is 1, then we don't need to do anything
+        top_percent_count = int(len(region_df_sub) * top_percent_cutoff)
+        region_df_sub = region_df_sub.head(top_percent_count)
+        info(
+            "Considering top " + str(top_percent_cutoff * 100) + "% of regions (N=" + str(top_percent_count) + "/" + str(region_df.shape[0]) + ") with at least " 
+            + str(region_df_sub["number of reads"].min()) + " reads (mean reads is " + str(region_df_sub["number of reads"].mean()) + ")"
+        )
 
     seen_region_seqs = {}
 
@@ -1052,30 +1055,28 @@ def run_initial_demux(
         + " --min_reads_to_use_region 10000000 " # this line prevents CRISPRessoPooled from running CRISPResso on the individual samples, which is not needed for region identification
         + " -n " + experiment_name + "_demux -p " + str(n_processors)
         + " --no_rerun --keep_intermediate --suppress_plots"
-        + " --skip_failed " # skip failed in thie initial demultiplexing step because we just want the region list
+        + " --skip_failed " # skip failed in the initial demultiplexing step because we just want the region list
         + suppress_output_string
     )
 
     crispresso_run_is_complete = False
     if os.path.exists(CRISPResso_output_folder):
         try:
-            crispresso_pooled_info = load_crispresso_info(
-                crispresso_info_file_path=CRISPResso_output_folder + "/CRISPResso2Pooled_info.json"
-            )
-            if (
-                "demultiplexing_genome_only_regions"
-                in crispresso_pooled_info["running_info"]["finished_steps"]
-            ):
+            crispresso_pooled_info = load_crispresso_info(crispresso_info_file_path=CRISPResso_output_folder + "/CRISPResso2Pooled_info.json")
+            if "demultiplexing_genome_only_regions" in crispresso_pooled_info["running_info"]["finished_steps"]:
                 crispresso_run_is_complete = True
-                info(
-                    "CRISPResso output folder already exists for initial demultiplexing, skipping CRISPResso run", {'percent_complete': 40}
-                )
+                info("CRISPResso output folder already exists for initial demultiplexing, skipping CRISPResso run", {'percent_complete': 40})
         except:
             pass
+
     if not crispresso_run_is_complete:
         info("Aligning reads to the genome to find amplicon locations")
         debug("Running command " + str(command))
-        subprocess.run(command, shell=True, check=False) #check is False because sometimes CRISPRessoPooled fails on some samples - but we just need the regions file
+        try:
+            subprocess.run(command, shell=True, check=True) 
+        except:
+            error("CRISPRessoPooled failed to run", {'percent_complete': 40})
+            raise
         info('Finished running alignment to find amplicon locations', {'percent_complete': 40})
 
     merged_regions_file = merge_locations(
@@ -1979,7 +1980,9 @@ def plot_heatmap(output_name):
     - output_name: the name of the output folder
     """
     d = pd.read_csv(output_name + ".complete_target_summary.txt", sep="\t")
-    d.dropna(inplace=True)
+    d.dropna(subset=["highest_a_g_pct", "highest_c_t_pct", "highest_indel_pct", "mod_pct"], how="all", inplace=True)
+    if len(d) == 0:
+        return
     d.set_index("target_id", inplace=True)
     fig = plt.figure(figsize=(12, 12), dpi=100, facecolor="w", edgecolor="k")
     sns.heatmap(
@@ -2003,9 +2006,15 @@ def plot_heatmap_sub(output_name, target_name):
     - target_name: the name of the target to plot
     """
     d = pd.read_csv(output_name + ".complete_target_summary.txt", sep="\t")
-    d.dropna(inplace=True)
+    d.dropna(subset=["highest_a_g_pct", "highest_c_t_pct", "highest_indel_pct", "mod_pct"], how="all", inplace=True)
+    if len(d) == 0:
+        return
     d.set_index("target_id", inplace=True)
+    if "ontarget_name" not in d.columns:
+        return
     dsub = d[d["ontarget_name"] == target_name]
+    if len(dsub) == 0:
+        return
     fig = plt.figure(figsize=(6, 6), dpi=100, facecolor="w", edgecolor="k")
     sns.heatmap(
         dsub[["highest_a_g_pct", "highest_c_t_pct", "highest_indel_pct", "mod_pct"]].astype(float),
@@ -3992,8 +4001,10 @@ def main():
             index_files_exist = True
         short_genome_file_name = '.'.join(args.genome_file.split(".")[0:-1])
         if os.path.isfile(short_genome_file_name + ".1.bt2"):
+            args.genome_file = short_genome_file_name
             index_files_exist = True
         if os.path.isfile(short_genome_file_name + ".1.bt2l"):
+            args.genome_file = short_genome_file_name
             index_files_exist = True
         if not index_files_exist:
             raise Exception(
