@@ -1,0 +1,1 @@
+CRISPRessoSea Replot --reordered_stats_file 01_make_aggregated_stats.ipynb.txt --reordered_sample_file samples.txt --sig_method_parameters neg_binomial,Treated,Control,0.05 --y_tick_fontsize 21 --x_tick_fontsize 21 --nucleotide_fontsize 21 -p 02_make_final.sh.out
