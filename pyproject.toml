@@ -30,3 +30,5 @@ CRISPRessoSea = "CRISPRessoSea.CRISPRessoSea:main"
 
 [tool.setuptools]
 include-package-data = true
+packages=["CRISPRessoSea"]
+
