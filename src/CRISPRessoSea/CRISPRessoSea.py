@@ -2624,10 +2624,10 @@ def identify_significant_targets(df_data, df_total_count, sample_groups, sig_met
         non_na_p_vals = res_table_df['p_val'].dropna()
         p_val_na_inds = res_table_df['p_val'].isna()
 
-        p_corrected_res = multipletests(non_na_p_vals, method='fdr_bh', alpha=sig_method_parameters['alpha'])[1] #this is added to recent versions of scipy
-
         corrected_p = pd.Series(np.nan, index=res_table_df.index)
-        corrected_p[~p_val_na_inds] = p_corrected_res
+        if len(non_na_p_vals) > 0:
+            p_corrected_res = multipletests(non_na_p_vals, method='fdr_bh', alpha=sig_method_parameters['alpha'])[1] #this is added to recent versions of scipy
+            corrected_p[~p_val_na_inds] = p_corrected_res
 
         res_table_df['bh_adj_p_val'] = corrected_p
         res_table_df['significant'] = res_table_df['bh_adj_p_val'] <= sig_method_parameters['alpha']
@@ -2677,10 +2677,10 @@ def identify_significant_targets(df_data, df_total_count, sample_groups, sig_met
         non_na_p_vals = res_table_df['p_val'].dropna()
         p_val_na_inds = res_table_df['p_val'].isna()
 
-        p_corrected_res = multipletests(non_na_p_vals, method='fdr_bh', alpha=sig_method_parameters['alpha'])[1] #this is added to recent versions of scipy
-
         corrected_p = pd.Series(np.nan, index=res_table_df.index)
-        corrected_p[~p_val_na_inds] = p_corrected_res
+        if len(non_na_p_vals) > 0:
+            p_corrected_res = multipletests(non_na_p_vals, method='fdr_bh', alpha=sig_method_parameters['alpha'])[1] #this is added to recent versions of scipy
+            corrected_p[~p_val_na_inds] = p_corrected_res
 
         res_table_df['bh_adj_p_val'] = corrected_p
         res_table_df['significant'] = res_table_df['bh_adj_p_val'] <= sig_method_parameters['alpha']
@@ -2848,11 +2848,11 @@ def identify_significant_targets(df_data, df_total_count, sample_groups, sig_met
         non_na_p_vals = res_table_df['p_val'].dropna()
         p_val_na_inds = res_table_df['p_val'].isna()
 
-        # Correct p-values using Benjamini-Hochberg FDR
-        p_corrected_res = multipletests(non_na_p_vals, method='fdr_bh', alpha=sig_method_parameters['alpha'])[1]
-
         corrected_p = pd.Series(np.nan, index=res_table_df.index)
-        corrected_p[~p_val_na_inds] = p_corrected_res
+        if len(non_na_p_vals) > 0:
+            # Correct p-values using Benjamini-Hochberg FDR
+            p_corrected_res = multipletests(non_na_p_vals, method='fdr_bh', alpha=sig_method_parameters['alpha'])[1]
+            corrected_p[~p_val_na_inds] = p_corrected_res
 
         res_table_df['bh_adj_p_val'] = corrected_p
         res_table_df['significant'] = res_table_df['bh_adj_p_val'] <= sig_method_parameters['alpha']
