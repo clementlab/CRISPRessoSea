@@ -1,0 +1,1 @@
+CRISPRessoSea Process -t guides.txt -s samples.txt -x ~/genomes/Homo_sapiens/UCSC/hg38/Sequence/Bowtie2Index/genome.fa -p 80 --crispresso_quantification_window_center -15 --crispresso_quantification_window_size 10
