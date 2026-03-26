@@ -1304,6 +1304,8 @@ def parse_target_info(target_file, sort_based_on_mismatch=False):
         target_df.loc[idx, "ontarget_sequence"] = this_ontarget_seq
         target_df.loc[idx, "ontarget_name"] = this_ontarget_name
 
+        if pd.isna(row['Locus']) or not isinstance(row['Locus'], str) or row['Locus'].strip() == "" or ':' not in row['Locus']:
+            raise ValueError(f"Invalid Locus for target row: {row.to_dict()}")
         this_chr_loc_els = row["Locus"].split(":")
         this_chr = this_chr_loc_els[0]
         if '+' in this_chr_loc_els[1] or '-' in this_chr_loc_els[1]:
@@ -3462,7 +3464,7 @@ def make_target_info_file(guide_seq_str, guide_name_str, guide_pam, genome_file,
                         target_name = guide_names[guide_seqs.index(guide_seq)]
                         break
                 if target_name is None:
-                    warn('Cannot parse casoffinder output. Cannot find guide name for guide sequence: ' + ontarget_seq)
+                    warn('Cannot parse casoffinder output. Cannot find guide name for guide sequence: ' + ontarget_seq + ' from row ' + line.strip())
                     target_name = ontarget_seq.replace("-","").replace("N","")
                 
                 offtarget_seq = line_els[3][1:-pam_len].replace("-","").replace("N","")
