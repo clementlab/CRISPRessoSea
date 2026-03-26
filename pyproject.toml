@@ -30,5 +30,6 @@ CRISPRessoSea = "CRISPRessoSea.CRISPRessoSea:main"
 
 [tool.setuptools]
 include-package-data = true
-packages=["CRISPRessoSea"]
+package-dir = {"" = "src"}
+packages = ["CRISPRessoSea"]
 
