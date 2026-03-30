@@ -1263,7 +1263,7 @@ def parse_target_info(target_file, sort_based_on_mismatch=False):
     target_df["target_id"] = "NA"  # unique id
     target_df["target_name"] = "NA"  # may be supplied by user
     target_df["target_chr"] = "NA"
-    target_df["target_pos"] = "NA"
+    target_df["target_pos"] = pd.Series([pd.NA] * len(target_df), index=target_df.index, dtype="Int64")
     target_df["target_seq_with_gaps"] = target_df["Sequence"]
     target_df["target_pam"] = target_df["PAM"]
     target_df["target_seq_no_gaps"] = "NA"
@@ -1521,11 +1521,12 @@ def make_target_region_assignments(
                                 region_seq,
                             ]
                         ]
-                    )
+                )
                     + "\n"
                 )
                 target_df.loc[target_idx, "matched_region_count"] = matched_region_count
                 target_df.loc[target_idx, "matched_region"] = region_name
+                target_df.loc[target_idx, "matched_region_id"] = region_name
             # if target wasn't selected as the final match for a region, it will be in all_target_matches
             elif target_id in all_target_matches:
                 target_nomatch_count += 1
