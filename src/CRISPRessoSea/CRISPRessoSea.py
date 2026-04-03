@@ -13,6 +13,7 @@ import sys
 import scipy.stats as sp
 import statsmodels.api as sm
 import traceback
+import shlex
 
 
 from CRISPResso2 import CRISPResso2Align, CRISPRessoMultiProcessing, CRISPRessoShared
@@ -1162,6 +1163,18 @@ def parse_sample_file(sample_file):
                 + "Expecting columns "
                 + str(required_columns)
             )
+
+    # Normalize sample metadata to strings so downstream command construction is stable.
+    sample_df["Name"] = sample_df["Name"].astype(str).str.strip()
+    sample_df["fastq_r1"] = sample_df["fastq_r1"].astype(str).str.strip()
+    if "fastq_r2" in sample_df.columns:
+        sample_df["fastq_r2"] = sample_df["fastq_r2"].where(
+            sample_df["fastq_r2"].notna(), None
+        )
+        sample_df["fastq_r2"] = sample_df["fastq_r2"].apply(
+            lambda x: str(x).strip() if x is not None else None
+        )
+
     return sample_df
 
 def parse_target_info(target_file, sort_based_on_mismatch=False):
@@ -1521,7 +1534,7 @@ def make_target_region_assignments(
                                 region_seq,
                             ]
                         ]
-                )
+                    )
                     + "\n"
                 )
                 target_df.loc[target_idx, "matched_region_count"] = matched_region_count
@@ -1691,52 +1704,58 @@ def run_crispresso_with_assigned_regions(
     returns:
     - the output folder for this CRISPResso run
     """
-    # Run CRISPResso again on the subset, this time including target sequences
-    r2_string = ""
-    if fastq_r2 is not None:
-        r2_string = " -r2 " + fastq_r2
-    output_string = ""
-    if output_folder != "":
-        output_string = " -o " + output_folder
-
-    suppress_output_string = ""
-    if suppress_commandline_output:
-        suppress_output_string = " --verbosity 1"
-
-    stop_on_fail_string = ""
-    if not fail_on_pooled_fail:
-        stop_on_fail_string = " --skip_failed"
-
-    base_editor_string = ""
-    if crispresso_base_editor_output:
-        base_editor_string = " --base_editor_output "
-
-    ignore_substitutions_string = ""
-    if crispresso_ignore_substitutions:
-        ignore_substitutions_string = " --ignore_substitutions "
+    experiment_name = str(experiment_name)
+    fastq_r1 = str(fastq_r1)
+    fastq_r2 = str(fastq_r2) if fastq_r2 is not None else None
 
     CRISPResso_output_folder = output_folder + "CRISPRessoPooled_on_" + experiment_name
 
-    command = (
-        "CRISPRessoPooled -f "
-        + crispresso_region_file
-        + " -x " + genome_file
-        + " -n " + experiment_name
-        + " -r1 " + fastq_r1
-        + r2_string
-        + output_string
-        + " --min_reads_to_use_region 1 "
-        + base_editor_string 
-        + ignore_substitutions_string
-        + " --quantification_window_center " + str(crispresso_quantification_window_center) 
-        + " --quantification_window_size " + str(crispresso_quantification_window_size)
-        + " --default_min_aln_score " + str(crispresso_default_min_aln_score)
-        + " -p " + str(n_processors)
-        + " --no_rerun  --exclude_bp_from_left 0 --exclude_bp_from_right 0 "
-        + " --plot_window_size " + str(crispresso_plot_window_size)
-        + suppress_output_string
-        + stop_on_fail_string
+    command = [
+        "CRISPRessoPooled",
+        "-f",
+        str(crispresso_region_file),
+        "-x",
+        str(genome_file),
+        "-n",
+        experiment_name,
+        "-r1",
+        fastq_r1,
+    ]
+    if fastq_r2 is not None and fastq_r2 != "":
+        command.extend(["-r2", fastq_r2])
+    if output_folder != "":
+        command.extend(["-o", str(output_folder)])
+
+    command.extend(
+        [
+            "--min_reads_to_use_region",
+            "1",
+            "--quantification_window_center",
+            str(crispresso_quantification_window_center),
+            "--quantification_window_size",
+            str(crispresso_quantification_window_size),
+            "--default_min_aln_score",
+            str(crispresso_default_min_aln_score),
+            "-p",
+            str(n_processors),
+            "--no_rerun",
+            "--exclude_bp_from_left",
+            "0",
+            "--exclude_bp_from_right",
+            "0",
+            "--plot_window_size",
+            str(crispresso_plot_window_size),
+        ]
     )
+
+    if crispresso_base_editor_output:
+        command.append("--base_editor_output")
+    if crispresso_ignore_substitutions:
+        command.append("--ignore_substitutions")
+    if suppress_commandline_output:
+        command.extend(["--verbosity", "1"])
+    if not fail_on_pooled_fail:
+        command.append("--skip_failed")
 
     crispresso_run_is_complete = False
     if os.path.exists(CRISPResso_output_folder):
@@ -1752,11 +1771,17 @@ def run_crispresso_with_assigned_regions(
 
     if not crispresso_run_is_complete:
         info("Aligning reads to the genome to find amplicon locations")
-        info("Running command " + str(command))
+        info("Running command " + " ".join(shlex.quote(arg) for arg in command))
         try:
-            subprocess.run(command, shell=True, check=True)
-        except:
-            raise Exception("Failed to run CRISPRessoPooled for sample " + experiment_name)
+            subprocess.run(command, check=True)
+        except subprocess.CalledProcessError as e:
+            raise Exception(
+                "Failed to run CRISPRessoPooled for sample "
+                + experiment_name
+                + " (exit code "
+                + str(e.returncode)
+                + ")"
+            )
 
     return CRISPResso_output_folder
 
