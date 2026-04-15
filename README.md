@@ -4,7 +4,18 @@ CRISPRessoSea is a tool for processing genome editing from multiple pooled ampli
 [Installation](#installation) | [Running modes](#running-crispressosea) | [Tutorial](#tutorial) | [Parameters](#complete-command-description)
 
 ## Installation
-CRISPRessoSea can be installed into an environment that contains CRISPResso2 and its dependencies. cas-offinder is optional but required for creating a guide info file from scratch.
+CRISPRessoSea can be installed using Bioconda.
+
+```
+conda config --add channels defaults
+conda config --add channels bioconda
+conda config --add channels conda-forge
+
+conda create -y -n CRISPRessoSea bioconda::crispressosea bioconda::cas-offinder # Create CRISPRessoSea conda environment
+conda activate CRISPRessoSea
+```
+
+Alternatively, CRISPRessoSea can be installed directly from github into an environment that contains CRISPResso2 and its dependencies. cas-offinder is optional but required for creating a guide info file from scratch.
 ```
 conda config --add channels defaults
 conda config --add channels bioconda
