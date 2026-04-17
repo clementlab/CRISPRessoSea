@@ -332,8 +332,9 @@ def process_pools(
 
     if region_file is not None:
         region_file_df = pd.read_csv(region_file, sep="\t", header=0)
+        region_file_df.columns = [str(col).strip().lower() for col in region_file_df.columns]
         required_cols = ['chr', 'start', 'end']
-        missing_cols = [col for col in required_cols if col.lower() not in region_file_df.columns]
+        missing_cols = [col for col in required_cols if col not in region_file_df.columns]
         if missing_cols:
             raise ValueError(f"region_file {region_file} is missing required columns: {missing_cols}")
         merged_region_info_file = output_folder + "/region_info.txt"
@@ -479,7 +480,7 @@ def process_pools(
     )
     # Update crispresso2_info fields that depend on sample_df
     crispresso2_info["results"]["samples"] = [
-        (row["Name"], row.get("group", "")) for _, row in sample_df.iterrows()
+        (row.Name, getattr(row, "group", "")) for row in sample_df.itertuples(index=False)
     ]
     crispresso2_info["results"]["completed_sea_arr"] = completed_samples
     crispresso2_info["results"]["failed_sea_arr"] = list(failed_samples.keys())
@@ -492,9 +493,9 @@ def process_pools(
 
 
     crispresso2_info["results"]["sea_input_groups"] = {}
-    for idx, row in sample_df.iterrows():
-        sample_name = row["Name"]
-        group = row.get("group", "")
+    for row in sample_df.itertuples(index=False):
+        sample_name = row.Name
+        group = getattr(row, "group", "")
         if group != '':
             crispresso2_info["results"]["sea_input_groups"][sample_name] = group
 
