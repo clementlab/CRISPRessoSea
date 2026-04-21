@@ -1384,13 +1384,9 @@ def make_target_region_assignments(
     # 3) Else (the chr:pos is not given or the target position is in no regions), if the target sequence is found in one region the target is assigned to that region
     # 4) Else (there are multiple regions that contain the target sequence), it is assigned to the region with the highest read count without a previously-assigned target.
     target_matches = {}  # target_id -> final assigned region
-    region_matches = defaultdict(
-        list
-    )  # region -> list of target_ids that were assigned to it
+    region_matches = defaultdict(list)  # region -> list of target_ids that were assigned to it
 
-    all_target_matches = defaultdict(
-        list
-    )  # target_id -> list of regions (all regions with position or sequence match)
+    all_target_matches = defaultdict(list)  # target_id -> list of regions (all regions with position or sequence match)
     all_region_matches = defaultdict(list)  # region -> list of target_ids
 
     for target_idx, target_row in target_df.iterrows():
@@ -1416,34 +1412,26 @@ def make_target_region_assignments(
             elif reverse_complement(target_seq_with_pam).upper() in region_seq.upper():
                 is_seq_match = True
 
-            if (
-                not allow_target_match_to_other_region_loc
-            ):  # don't allow matches based on target match to region sequence
-                is_seq_match = False
-
-            if is_seq_match:
-                this_target_matches.append(region_name)
-
             # next, check if the target position is within the region
             is_pos_match = False
-            if (
-                str(target_chr) == str(region_chr)
-                and target_pos >= region_start
-                and target_pos <= region_end
-            ):
-                this_target_region_matches.append(region_name)
+            if (str(target_chr) == str(region_chr) and target_pos >= region_start and target_pos <= region_end):
                 is_pos_match = True
-            elif (
-                str(target_chr).replace("chr", "") == str(region_chr).replace("chr", "")
-                and target_pos >= region_start
-                and target_pos <= region_end
-            ):
-                this_target_region_matches.append(region_name)
+            elif ( str(target_chr).replace("chr", "") == str(region_chr).replace("chr", "") and target_pos >= region_start and target_pos <= region_end):
                 is_pos_match = True
-
-            if is_seq_match or is_pos_match:
-                all_target_matches[target_id].append(region_name)
-                all_region_matches[region_name].append(target_id)
+            if is_pos_match and not is_seq_match:
+                warn(
+                    f"Warning: Target {target_id} matches region {region_name} by position but not by sequence.\n"
+                    f"That is, sequence \"{target_seq_with_pam}\" is not found in region sequence \"{region_seq}\" "
+                    f"for region {region_name} ({region_chr}:{region_start}-{region_end}) that contains the target at position {target_chr}:{target_pos}.\n"
+                    "This may be a sign of an error in the target file or the region file."
+                ) 
+            if is_seq_match:
+                if allow_target_match_to_other_region_loc:  # don't allow matches based on target match to region sequence
+                    this_target_matches.append(region_name)
+                if is_pos_match:
+                    this_target_region_matches.append(region_name)
+                    all_target_matches[target_id].append(region_name)
+                    all_region_matches[region_name].append(target_id)
 
         # make the final assignment for this target
         if len(this_target_region_matches) == 1:  # if there is one region match, take it
@@ -3041,9 +3029,11 @@ def plot_targets_and_heatmap(
     ax1.tick_params(axis="y", labelsize=y_tick_fontsize)
     # replace y tick lables with target names
     if target_names is not None:
-        ax1.set_yticklabels(target_names, rotation=0, fontsize=y_tick_fontsize)
+        y_labels = [str(x) for x in target_names]
     else:
-        ax1.set_yticklabels(df_mapped.index, rotation=0, fontsize=y_tick_fontsize)
+        y_labels = [str(x) for x in df_data["target_name"]]
+    ax1.set_yticks(np.arange(len(y_labels)) + 0.5)
+    ax1.set_yticklabels(y_labels, rotation=0, fontsize=y_tick_fontsize)
 
     ax1.set_title("Target sequences", fontsize=title_fontsize)
     ax1.set_ylabel('')
