@@ -181,6 +181,47 @@ def parse_agg_method_parameters(agg_method_parameter_string):
     
     return [SigMethod.MOD_PCT]
 
+def rewrite_alternate_alleles(alternate_alleles, target_df, output_folder):
+    """
+    Rewrites the alternate alleles file to map target names to the dynamically assigned region names.
+    """
+    if alternate_alleles is None or not os.path.isfile(alternate_alleles):
+        return None
+        
+    rewritten_file = os.path.join(output_folder, "rewritten_alternate_alleles.txt")
+    
+    target_name_to_region = {}
+    for _, row in target_df.iterrows():
+        if "matched_region_id" in row and pd.notna(row["matched_region_id"]) and row["matched_region_id"] != "NA":
+            target_name_to_region[row["target_name"]] = row["matched_region_id"]
+    print('target_df: ' + str(target_df.head()))
+            
+    with open(alternate_alleles, 'r') as alt_in, open(rewritten_file, 'w') as alt_out:
+        alt_head_els = alt_in.readline().rstrip("\n").split("\t")
+        
+        # Determine the index of region_name column
+        target_name_ind = 0
+        alt_head_els_lower = [x.lower() for x in alt_head_els]
+        if 'region_name' in alt_head_els_lower:
+            target_name_ind = alt_head_els_lower.index('region_name')
+            alt_out.write("\t".join(alt_head_els) + "\n")
+        elif 'target_name' in alt_head_els_lower:
+            target_name_ind = alt_head_els_lower.index('target_name')
+            alt_head_els[target_name_ind] = 'region_name' #rename to region_name for downstream processing by CRISPRessoPooled
+            alt_out.write("\t".join(alt_head_els) + "\n")
+        else:
+            alt_in.seek(0, 0)
+            
+        for line in alt_in:
+            line_els = line.rstrip("\n").split("\t")
+            if len(line_els) > target_name_ind:
+                target_name = line_els[target_name_ind]
+                if target_name in target_name_to_region:
+                    line_els[target_name_ind] = target_name_to_region[target_name]
+            alt_out.write("\t".join(line_els) + "\n")
+            
+    return rewritten_file
+
 def process_pools(
     args,
     sample_file,
@@ -207,6 +248,7 @@ def process_pools(
     plot_group_order=None,
     sig_method_parameters=None,
     agg_methods=[],
+    alternate_alleles=None,
 ):
     """
     Discover amplicons and analyze sample editing at amplicons. This is the main entrypoint for this program.
@@ -240,6 +282,7 @@ def process_pools(
     - plot_group_order: the order of groups to plot. If None, the default order will be used. This is a list of strings.
     - sig_method_parameters: the parameters to use for the significance method. 
     - agg_methods: list of aggregation methods to plot (e.g., ['max_ag', 'max_indel'])
+    - alternate_alleles: path to the alternate alleles file
     """
 
     log_filename = os.path.join(output_folder, "CRISPRessoSea_RUNNING_LOG.txt")
@@ -378,7 +421,12 @@ def process_pools(
         output_folder,
         sort_based_on_mismatch,
         allow_target_match_to_other_region_loc=allow_target_match_to_other_region_loc,
+        alternate_alleles=alternate_alleles,
     )
+    
+    if alternate_alleles is not None:
+        alternate_alleles = rewrite_alternate_alleles(alternate_alleles, target_df, output_folder)
+
     if gene_annotations is not None:
         target_df = add_region_annotations_to_target_df(target_df, gene_annotations)
     else:
@@ -416,6 +464,7 @@ def process_pools(
             crispresso_plot_window_size=crispresso_plot_window_size,
             crispresso_ignore_substitutions=crispresso_ignore_substitutions,
             fail_on_pooled_fail=fail_on_pooled_fail,
+            alternate_alleles=alternate_alleles,
         )
         sample_df.loc[sample_idx, "CRISPRessoPooled_output_folder"] = this_pooled_run
         if this_pooled_run is not None:
@@ -1356,6 +1405,7 @@ def make_target_region_assignments(
     output_folder,
     sort_based_on_mismatch=False,
     allow_target_match_to_other_region_loc=False,
+    alternate_alleles=None,
 ):
     """
     Assign guide targets to regions based on their sequences and positions
@@ -1377,6 +1427,31 @@ def make_target_region_assignments(
     merged_region_df = pd.read_csv(merged_region_info_file, sep="\t")
     merged_region_df.index = merged_region_df["chr"].astype(str) + "_" + merged_region_df["start"].astype(str) + "_" + merged_region_df["end"].astype(str)
 
+    alt_alleles_dict = {}
+    if alternate_alleles is not None and os.path.isfile(alternate_alleles):
+        with open(alternate_alleles, 'r') as alt_in:
+            alt_head_els = alt_in.readline().rstrip("\n").split("\t")
+
+            # Check to see if alternate_alleles file has header (otherwise just assume first col is target name, second is seq)
+            alt_head_els_lower = [x.lower() for x in alt_head_els]
+            if 'region_name' in alt_head_els_lower:
+                region_name_ind = alt_head_els_lower.index('region_name')
+            elif 'target_name' in alt_head_els_lower:
+                region_name_ind = alt_head_els_lower.index('target_name')
+            else:
+                alt_in.seek(0, 0)
+                region_name_ind = 0
+
+            if 'reference_seqs' in alt_head_els_lower:
+                allele_seq_ind = alt_head_els_lower.index('reference_seqs')
+            else:
+                allele_seq_ind = 1
+
+            for line in alt_in:
+                line_els = line.rstrip("\n").split("\t")
+                if len(line_els) > max(region_name_ind, allele_seq_ind):
+                    alt_alleles_dict[line_els[region_name_ind]] = [x.strip() for x in line_els[allele_seq_ind].split(',')]
+
     # first, for each target, match its sequence to genomic region(s)
     # the matching will be performed so that each target is assigned to
     # 1) If there is one region that corresponds to the target position it is assigned to that region.
@@ -1395,6 +1470,14 @@ def make_target_region_assignments(
         target_name = target_row["target_name"]
         target_chr = target_row["target_chr"]
         target_pos = target_row["target_pos"]
+        alt_allele_seqs = ""
+        guide_matches_alt = False
+        if target_name in alt_alleles_dict:
+            alt_allele_seqs = alt_alleles_dict[target_name]
+            for alt_allele_seq in alt_allele_seqs:
+                if target_seq_with_pam.upper() in alt_allele_seq.upper() or target_seq_with_pam.upper() in reverse_complement(alt_allele_seq.upper()):
+                    guide_matches_alt = True
+
 
         this_target_matches = []
         this_target_region_matches = []
@@ -1411,6 +1494,8 @@ def make_target_region_assignments(
                 is_seq_match = True
             elif reverse_complement(target_seq_with_pam).upper() in region_seq.upper():
                 is_seq_match = True
+            elif alt_allele_seqs and guide_matches_alt:
+                is_seq_match = True
 
             # next, check if the target position is within the region
             is_pos_match = False
@@ -1418,6 +1503,7 @@ def make_target_region_assignments(
                 is_pos_match = True
             elif ( str(target_chr).replace("chr", "") == str(region_chr).replace("chr", "") and target_pos >= region_start and target_pos <= region_end):
                 is_pos_match = True
+
             if is_pos_match and not is_seq_match:
                 warn(
                     f"Warning: Target {target_id} matches region {region_name} by position but not by sequence.\n"
@@ -1626,6 +1712,10 @@ def make_target_region_assignments(
                     target_chr = target_df.loc[target_df["target_id"] == target_id, "target_chr"].values[0]
                     target_pos = target_df.loc[target_df["target_id"] == target_id, "target_pos"].values[0]
                     region_name = region_name + "_" + target_name
+                    
+                    if target_name in alt_alleles_dict and len(alt_alleles_dict[target_name]) > 0:
+                        region_seq = alt_alleles_dict[target_name][0]
+                        
                     target_df.loc[target_df["target_id"] == target_id, "matched_region_id"] = region_name
                     cout.write("\t".join([region_name, region_seq, target_seq]) + "\n")
                     printed_crispresso_count += 1
@@ -1670,6 +1760,7 @@ def run_crispresso_with_assigned_regions(
     crispresso_ignore_substitutions=False,
     suppress_commandline_output=True,
     fail_on_pooled_fail=False,
+    alternate_alleles=None,
 ):
     """
     Run CRISPResso on a specific sample with the assigned regions
@@ -1689,6 +1780,7 @@ def run_crispresso_with_assigned_regions(
     - crispresso_ignore_substitutions: whether to ignore substitutions in CRISPResso
     - suppress_commandline_output: whether to suppress commandline output from CRISPRessoPooled
     - fail_on_pooled_fail: if true, fail if any pooled CRISPResso run fails. Otherwise, continue even if sub-CRISPResso commands fail.
+    - alternate_alleles: path to the alternate alleles file
 
     returns:
     - the output folder for this CRISPResso run
@@ -1745,6 +1837,8 @@ def run_crispresso_with_assigned_regions(
         command.extend(["--verbosity", "1"])
     if not fail_on_pooled_fail:
         command.append("--skip_failed")
+    if alternate_alleles is not None:
+        command.extend(["--alternate_alleles", str(alternate_alleles)])
 
     crispresso_run_is_complete = False
     if os.path.exists(CRISPResso_output_folder):
@@ -3631,6 +3725,11 @@ def main():
         help="Ignores substitutions when calling reads as modified or unmodified, affecting the 'mod_pct' columns. By default, substitutions are considered when calling reads as modified or unmodified.",
         action="store_true",
     )
+    process_parser.add_argument(
+        "--alternate_alleles",
+        help="Alternate alleles file to be passed to CRISPRessoPooled to override amplicon sequences for specific regions.",
+        default=None,
+    )
 
     process_parser.add_argument(
         "--allow_unplaced_chrs",
@@ -4089,6 +4188,7 @@ def main():
             plot_group_order=plot_group_order,
             sig_method_parameters=sig_method_parameters,
             agg_methods=parse_agg_method_parameters(args.aggregation_method),
+            alternate_alleles=args.alternate_alleles,
         )
     else:
         error (
