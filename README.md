@@ -35,8 +35,8 @@ CRISPRessoSea operates in three primary running modes to streamline the preparat
 
 ### Process
 `Process`: This program will process a pool of pools given:
- -  a target information file with headers: Guide (Name of the on-target sequence guide), Sequence, PAM (PAM sequence), #MM (Number of mismatches), and Locus (formatted like chr1:+2345). Target names can be provided in a 'Target' column. 
- -  a sample file with headers: Name, fastq_r1, fastq_r2 (optional for single-end reads). A column specifying the group can also be provided in this file.
+ -  a [target information file](#target-file) with headers: Guide (Name of the on-target sequence guide), Sequence, PAM (PAM sequence), #MM (Number of mismatches), and Locus (formatted like chr1:+2345). Target names can be provided in a 'Target' column. 
+ -  a [sample file](#sample-file) with headers: Name, fastq_r1, fastq_r2 (optional for single-end reads). A column specifying the group can also be provided in this file.
  -  a reference genome. The path to the reference genome and bowtie2 indices is provided not including the trailing .fa
 
  ### Replot
@@ -67,9 +67,9 @@ CRISPRessoSea MakeGuideFile --guide_seq GGACTGAGGGCCATGGACAC --pam NGG --guide_n
 - The `--pam` and `--max_mismatches` parameters are used for finding off-target locations. Here, for our small example we'll search for up to 2 mismatches, but in practice up to 4 or 5 mismatches are investigated.
 - The `--genome_file` parameter specifies the path to the genome file. Here we are using a super-small genome with only the on-target and three off-by-2 off-targets.
   
-Note that running MakeGuideFile requres [Cas-offinder](https://github.com/snugel/cas-offinder) for enumerating off-target sites.
+Note that running MakeGuideFile requires [Cas-offinder](https://github.com/snugel/cas-offinder) for enumerating off-target sites.
 
-This produces a guide info file `CRISPRessoSea_MakeGuideFileOutput//CRISPRessoSea.guide_info.txt` that contains the on- and off-target locations for the CTLA4_site9 guide.:
+This produces a guide info file `CRISPRessoSea_MakeGuideFileOutput/CRISPRessoSea.guide_info.txt` that contains the on- and off-target locations for the CTLA4_site9 guide.:
 ```
 Guide   Target  Sequence        PAM     #MM     Locus   Mismatch_info
 CTLA4_site9     CTLA4_site9_ON_CTLA4_site0_500  GGACTGAGGGCCATGGACAC    GGG     0       CTLA4_site0:+500        Mismatches: 0
@@ -85,12 +85,12 @@ CTLA4_site9     CTLA4_site9_OB2_CTLA4_site3_500 GGACTGgGGGCCtTGGACAC    AGG     
 - The `Mismatch_info` column is not required, but includes text describing the number of mismatches and bulges (if any). Note that Cas-offinder 3 is required for enumerating off-targets with bulges.
 
 ### Process
-If you ran `MakeGuideFile`, you can now use the identified offtargets to run in `Process` mode using the command:
+If you ran `MakeGuideFile`, you can now use the identified off-targets to run in `Process` mode using the command:
 ```
 CRISPRessoSea Process --sample_file samples.demo.txt --target_file CRISPRessoSea_MakeGuideFileOutput/CRISPRessoSea.guide_info.txt --genome_file demo_genome.fa
 ```
-- The `--sample_file` parameter specifies a text file specifying the names and fastq sequences of samples with columns `Name`, `fastq_r1`, and optionally `fastq_r2` and `group`.
-- The `--target_file` parameter specifies a text file specifying the targets - in this case it is produced by the MakeGuideFile function.
+- The `--sample_file` parameter specifies a [sample file](#sample-file) specifying the names and fastq sequences of samples with columns `Name`, `fastq_r1`, and optionally `fastq_r2` and `group`.
+- The `--target_file` parameter specifies a [target file](#target-file) specifying the targets - in this case it is produced by the MakeGuideFile function.
 - The `--genome_file` parameter specifies the path to the genome file.
 
 If you didn't run `MakeGuideFile`, you can use the guide_info file in the demo dataset (see [samples.demo.txt](https://raw.githubusercontent.com/clementlab/CRISPRessoSea/refs/heads/main/demo/make_demo/small_demo/CRISPRessoSea_demo/samples.demo.txt) and [guides.demo.txt](https://raw.githubusercontent.com/clementlab/CRISPRessoSea/refs/heads/main/demo/make_demo/small_demo/CRISPRessoSea_demo/guides.demo.txt)):
@@ -108,7 +108,7 @@ CRISPRessoSea Replot --output_folder replot.output --reordered_stats_file replot
 ```
 - The `--output_folder` parameter specifies where the replotted output will be produced.
 - The `--reordered_stats_file` parameter is a modified aggregated stats file in the format produced by `Process`.
-- The `--reordered_samples_file` parameter is a modified sample file where samples can be reordered if necessary.
+- The `--reordered_sample_file` parameter is a modified [sample file](#sample-file) where samples can be reordered if necessary.
 - The `--sig_method_parameters` parameter specifies the significance test to be applied in the form of: 
  - none 
  - hard_cutoff,{cutoff}                     
@@ -262,7 +262,7 @@ CRISPRessoSea requires two main input files: a **target file** and a **sample (e
 
 ### Target File
 This file provides information about each target profiled in the amplicon sequencing experiment. Targets can include a combination of on- and off-targets. Targets will be grouped by the 'Guide' column in plots. Information for each target is provided as a row in this table.
-If the off-target sequences or locations are not known, this file can be generated using the `MakeGuideFile' command above. Example: [guides.demo.txt](https://raw.githubusercontent.com/clementlab/CRISPRessoSea/refs/heads/main/demo/make_demo/small_demo/CRISPRessoSea_demo/guides.demo.txt).
+If the off-target sequences or locations are not known, this file can be generated using the `MakeGuideFile` command above. Example: [guides.demo.txt](https://raw.githubusercontent.com/clementlab/CRISPRessoSea/refs/heads/main/demo/make_demo/small_demo/CRISPRessoSea_demo/guides.demo.txt).
 
 **Required columns:**
 
