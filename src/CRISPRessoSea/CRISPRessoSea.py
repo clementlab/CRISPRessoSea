@@ -211,6 +211,8 @@ def rewrite_alternate_alleles(alternate_alleles, target_df, output_folder):
             alt_out.write("\t".join(alt_head_els) + "\n")
         else:
             alt_in.seek(0, 0)
+            target_name_ind = 0
+            alt_out.write("region_name\treference_seqs\n")
             
         for line in alt_in:
             line_els = line.rstrip("\n").split("\t")
@@ -1495,7 +1497,13 @@ def make_target_region_assignments(
             elif reverse_complement(target_seq_with_pam).upper() in region_seq.upper():
                 is_seq_match = True
             elif alt_allele_seqs and guide_matches_alt:
-                is_seq_match = True
+                for alt_allele_seq in alt_allele_seqs:
+                    if (alt_allele_seq.upper() in region_seq.upper() or 
+                        region_seq.upper() in alt_allele_seq.upper() or 
+                        reverse_complement(alt_allele_seq).upper() in region_seq.upper() or 
+                        region_seq.upper() in reverse_complement(alt_allele_seq).upper()):
+                        is_seq_match = True
+                        break
 
             # next, check if the target position is within the region
             is_pos_match = False
@@ -1505,12 +1513,15 @@ def make_target_region_assignments(
                 is_pos_match = True
 
             if is_pos_match and not is_seq_match:
-                warn(
-                    f"Warning: Target {target_id} matches region {region_name} by position but not by sequence.\n"
-                    f"That is, sequence \"{target_seq_with_pam}\" is not found in region sequence \"{region_seq}\" "
-                    f"for region {region_name} ({region_chr}:{region_start}-{region_end}) that contains the target at position {target_chr}:{target_pos}.\n"
-                    "This may be a sign of an error in the target file or the region file."
-                ) 
+                if alt_allele_seqs and guide_matches_alt:
+                    is_seq_match = True
+                else:
+                    warn(
+                        f"Warning: Target {target_id} matches region {region_name} by position but not by sequence.\n"
+                        f"That is, sequence \"{target_seq_with_pam}\" is not found in region sequence \"{region_seq}\" "
+                        f"for region {region_name} ({region_chr}:{region_start}-{region_end}) that contains the target at position {target_chr}:{target_pos}.\n"
+                        "This may be a sign of an error in the target file or the region file."
+                    ) 
             if is_seq_match:
                 if allow_target_match_to_other_region_loc:  # don't allow matches based on target match to region sequence
                     this_target_matches.append(region_name)
