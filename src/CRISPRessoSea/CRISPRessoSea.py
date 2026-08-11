@@ -200,6 +200,8 @@ def rewrite_alternate_alleles(alternate_alleles, target_df, output_folder):
             
     with open(alternate_alleles, 'r') as alt_in, open(rewritten_file, 'w') as alt_out:
         alt_head_els = alt_in.readline().rstrip("\n").split("\t")
+        if len(alt_head_els) < 2:
+            raise ValueError("Parsing error in alternate alleles file: expected tab-separated format with at least two columns, but found fewer. Please ensure you are using tabs, not spaces.")
         
         # Determine the index of region_name column
         target_name_ind = 0
@@ -218,10 +220,14 @@ def rewrite_alternate_alleles(alternate_alleles, target_df, output_folder):
             
         for line in alt_in:
             line_els = line.rstrip("\n").split("\t")
+            if len(line_els) < target_name_ind + 1:
+                raise ValueError(f"Error parsing line in alternate alleles file with too few columns. Line: {line} Expected at least {target_name_ind + 1} tab-separated columns.")
             if len(line_els) > target_name_ind:
                 target_name = line_els[target_name_ind]
                 if target_name in target_name_to_region:
                     line_els[target_name_ind] = target_name_to_region[target_name]
+                else:
+                    warn(f"Alternate allele target '{target_name}' was not found in the targets list or was not assigned to a region. This allele will not be used.")
             alt_out.write("\t".join(line_els) + "\n")
             
     return rewritten_file
@@ -2056,7 +2062,11 @@ def analyze_run(output_name, crispresso_folder, target_df, region_df):
                 target_data.append(data_to_write)
 
                 #copy over CRISPResso plot 2b for this target
-                plot2b_file = (crispresso_folder + "/" + folder_name + "/" + run_info["results"]["refs"]["Reference"]["plot_2b_roots"][0] + ".pdf")
+                try:
+                    plot2b_file = (crispresso_folder + "/" + folder_name + "/" + run_info["results"]["refs"]["Reference"]["plot_2b_roots"][0] + ".pdf")
+                except (IndexError, KeyError, TypeError):
+                    warn("WARNING: missing plot2b info for", pooled_result_name)
+                    continue
                 if not os.path.isfile(plot2b_file):
                     warn("WARNING: missing plot2b file for", pooled_result_name)
                     continue
