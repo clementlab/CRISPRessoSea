@@ -57,7 +57,7 @@ def main():
     parser.add_argument("-a", "--alternate_alleles", default=None, help="Alternate alleles file")
     parser.add_argument("-n", "--n_sequences", type=int, default=100, help="Number of sequences per amplicon per sample")
     parser.add_argument("-w", "--window", type=int, default=200, help="Window size for genomic amplicons")
-    parser.add_argument("--n_random_reads", type=int, default=100, help="Number of random off-target reads to add from the genome")
+    parser.add_argument("--n_random_reads", type=int, default=1000, help="Number of random off-target reads to add from the genome")
     parser.add_argument("--paired", action="store_true", help="Generate paired-end reads")
     parser.add_argument("--overlap", type=int, default=50, help="Overlap length for paired-end reads (default: 50)")
     parser.add_argument("-o", "--output_folder", default="simulated_reads", help="Output directory")
