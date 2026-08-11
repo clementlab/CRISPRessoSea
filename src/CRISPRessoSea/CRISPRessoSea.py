@@ -179,7 +179,7 @@ def parse_agg_method_parameters(agg_method_parameter_string):
     elif agg_method_parameter_string.lower() == "all":
         return [AggMethod.MOD_PCT, AggMethod.MAX_AG, AggMethod.MAX_CT, AggMethod.MAX_INDEL]
     
-    warnings.warn("Cannot parse aggregation_method parameter '" + agg_method_parameter_string + "'. Defaulting to mod_pct.")
+    warn("Cannot parse aggregation_method parameter '" + agg_method_parameter_string + "'. Defaulting to mod_pct.")
     
     return [AggMethod.MOD_PCT]
 
