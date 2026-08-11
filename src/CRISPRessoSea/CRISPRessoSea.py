@@ -170,16 +170,18 @@ def parse_agg_method_parameters(agg_method_parameter_string):
         return [AggMethod.MOD_PCT]
     elif agg_method_parameter_string.lower() == "mod_pct" or agg_method_parameter_string.lower() == "modpct":
         return [AggMethod.MOD_PCT]
-    elif agg_method_parameter_string.lower() == "max_ag" or agg_method_parameter_string.lower() == "maxag" or agg_method_parameter_string.lower() == 'ag':
+    elif agg_method_parameter_string.lower() in ["max_a_g", "max_ag", "maxag", "ag", "a_g"]:
         return [AggMethod.MAX_AG]
-    elif agg_method_parameter_string.lower() == "max_ct" or agg_method_parameter_string.lower() == "maxct" or agg_method_parameter_string.lower() == 'ct':
+    elif agg_method_parameter_string.lower() in ["max_c_t", "max_ct", "maxct", "ct", "c_t"]:
         return [AggMethod.MAX_CT]
-    elif agg_method_parameter_string.lower() == "max_indel" or agg_method_parameter_string.lower() == "maxindel":
+    elif agg_method_parameter_string.lower() in ["max_indel", "maxindel"]:
         return [AggMethod.MAX_INDEL]
     elif agg_method_parameter_string.lower() == "all":
         return [AggMethod.MOD_PCT, AggMethod.MAX_AG, AggMethod.MAX_CT, AggMethod.MAX_INDEL]
     
-    return [SigMethod.MOD_PCT]
+    warnings.warn("Cannot parse aggregation_method parameter '" + agg_method_parameter_string + "'. Defaulting to mod_pct.")
+    
+    return [AggMethod.MOD_PCT]
 
 def rewrite_alternate_alleles(alternate_alleles, target_df, output_folder):
     """
