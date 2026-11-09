@@ -49,6 +49,44 @@ debug = logger.debug
 info = logger.info
 
 
+def normalize_chr(val):
+    """
+    Safely coerces any chromosome representation (str, int, float, numpy)
+    to a clean string without trailing '.0' (e.g. 1, 1.0, np.float64(1.0) -> '1').
+    """
+    if val is None or pd.isna(val):
+        return ""
+    if isinstance(val, (int, np.integer)):
+        return str(val)
+    if isinstance(val, (float, np.floating)):
+        if val.is_integer():
+            return str(int(val))
+        s = str(val)
+        return s[:-2] if s.endswith(".0") else s
+    s = str(val).strip()
+    if s.endswith(".0"):
+        try:
+            f = float(s)
+            if f.is_integer():
+                return str(int(f))
+        except ValueError:
+            pass
+    return s
+
+
+def chr_matches(chr1, chr2):
+    """
+    Compares two chromosome identifiers case-insensitively, ignoring any 'chr' prefix.
+    """
+    c1 = normalize_chr(chr1).lower()
+    c2 = normalize_chr(chr2).lower()
+    if c1.startswith("chr"):
+        c1 = c1[3:]
+    if c2.startswith("chr"):
+        c2 = c2[3:]
+    return c1 == c2
+
+
 def load_crispresso_info(crispresso_info_file_path):
     if not os.path.exists(crispresso_info_file_path):
         raise Exception("CRISPResso info file not found at " + crispresso_info_file_path)
@@ -384,7 +422,7 @@ def process_pools(
     display_names = {}
 
     if region_file is not None:
-        region_file_df = pd.read_csv(region_file, sep="\t", header=0)
+        region_file_df = pd.read_csv(region_file, sep="\t", header=0, dtype={"chr": str, "chrom": str})
         region_file_df.columns = [str(col).strip().lower() for col in region_file_df.columns]
         required_cols = ['chr', 'start', 'end']
         missing_cols = [col for col in required_cols if col not in region_file_df.columns]
@@ -395,11 +433,11 @@ def process_pools(
         with open(merged_region_info_file, "w") as fout:
             fout.write('chr\tstart\tend\tregion_count\tseq\n')
             for _, region_row in region_file_df.iterrows():
-                region_chr = region_row['chr']
+                region_chr = normalize_chr(region_row['chr'])
                 region_start = region_row['start']
                 region_end = region_row['end']
                 # skip rows with missing values
-                if pd.isnull(region_chr) or pd.isnull(region_start) or pd.isnull(region_end):
+                if pd.isnull(region_chr) or region_chr == "" or pd.isnull(region_start) or pd.isnull(region_end):
                     continue
                 try:
                     region_start = int(region_start)
@@ -802,7 +840,7 @@ def make_sea_report_from_folder(
 
     summary_stats = crispresso2_info["results"]["summary_stats"]
     targets = list(summary_stats["target_name"])
-    chroms = list(summary_stats["target_chr"])
+    chroms = [normalize_chr(c) for c in summary_stats["target_chr"]]
     positions = list(summary_stats["target_pos"])
     if "region_anno" in summary_stats:
         annotations = list(summary_stats.get("region_anno"))
@@ -955,7 +993,7 @@ def merge_locations(
 
     region_info = {}
     good_nonoverlapping_regions = []
-    region_df = pd.read_csv(genome_read_counts_file, sep="\t")
+    region_df = pd.read_csv(genome_read_counts_file, sep="\t", dtype={"chr_id": str})
     region_df_sub = region_df.sort_values(by="number of reads", ascending=False)
 
     #filter first by amplicon length
@@ -973,9 +1011,9 @@ def merge_locations(
     seen_region_seqs = {}
 
     for index, region_row in region_df_sub.iterrows():
-        region_chr = region_row.chr_id
-        region_start = region_row.start
-        region_end = region_row.end
+        region_chr = normalize_chr(region_row.chr_id)
+        region_start = int(region_row.start)
+        region_end = int(region_row.end)
         region_count = region_row["number of reads"]
         region_name = "_".join([region_chr, str(region_start), str(region_end)])
         region_seq_output = subprocess.check_output(
@@ -1380,7 +1418,7 @@ def parse_target_info(target_file, sort_based_on_mismatch=False):
         if pd.isna(row['Locus']) or not isinstance(row['Locus'], str) or row['Locus'].strip() == "" or ':' not in row['Locus']:
             raise ValueError(f"Invalid Locus for target row: {row.to_dict()}")
         this_chr_loc_els = row["Locus"].split(":")
-        this_chr = this_chr_loc_els[0]
+        this_chr = normalize_chr(this_chr_loc_els[0].strip())
         if '+' in this_chr_loc_els[1] or '-' in this_chr_loc_els[1]:
             this_pos = int(this_chr_loc_els[1][1:])
         else:
@@ -1434,7 +1472,8 @@ def make_target_region_assignments(
     """
     # we parse the target_df here because we'll add more columns to it
     target_df = parse_target_info(target_file, sort_based_on_mismatch)
-    merged_region_df = pd.read_csv(merged_region_info_file, sep="\t")
+    merged_region_df = pd.read_csv(merged_region_info_file, sep="\t", dtype={"chr": str})
+    merged_region_df["chr"] = merged_region_df["chr"].apply(normalize_chr)
     merged_region_df.index = merged_region_df["chr"].astype(str) + "_" + merged_region_df["start"].astype(str) + "_" + merged_region_df["end"].astype(str)
 
     alt_alleles_dict = {}
@@ -1515,9 +1554,7 @@ def make_target_region_assignments(
 
             # next, check if the target position is within the region
             is_pos_match = False
-            if (str(target_chr) == str(region_chr) and target_pos >= region_start and target_pos <= region_end):
-                is_pos_match = True
-            elif ( str(target_chr).replace("chr", "") == str(region_chr).replace("chr", "") and target_pos >= region_start and target_pos <= region_end):
+            if chr_matches(target_chr, region_chr) and target_pos >= region_start and target_pos <= region_end:
                 is_pos_match = True
 
             if is_pos_match and not is_seq_match:
@@ -1760,7 +1797,9 @@ def make_target_region_assignments(
             "No regions matched to targets. Check the target file and the regions file for consistency.\n" + \
             "\tTarget file: " + target_file + "\n\tRegions file: " + merged_region_info_file
         )
-    region_df = pd.read_csv(all_region_output_file, sep="\t")
+    region_df = pd.read_csv(all_region_output_file, sep="\t", dtype={"chr": str, "target_chr": str})
+    region_df["chr"] = region_df["chr"].apply(normalize_chr)
+    region_df["target_chr"] = region_df["target_chr"].apply(normalize_chr)
     return crispresso_output_file, target_df, region_df
 
 def run_crispresso_with_assigned_regions(
@@ -3301,10 +3340,11 @@ def add_region_annotations_to_target_df(target_df, gene_annotations):
     """
     info(f"Loading gene coordinates from annotation file: {gene_annotations}...")
     try:
-        df_genes = pd.read_csv(gene_annotations, sep="\t")
+        df_genes = pd.read_csv(gene_annotations, sep="\t", dtype={"chr": str, "chrom": str})
 
         if "chr" in df_genes.columns:
             df_genes["chrom"] = df_genes.chr
+        df_genes["chrom"] = df_genes["chrom"].apply(normalize_chr)
         if "txStart" in df_genes.columns:
             df_genes["txStart"] = df_genes.txStart.astype(int)
         elif "start" in df_genes.columns:
@@ -3342,8 +3382,10 @@ def add_region_annotations_to_target_df(target_df, gene_annotations):
         warn("Failed to load the gene annotations file.")
 
     def find_overlapping_genes(row, df_genes):
+        target_chr = normalize_chr(row.target_chr)
+        chrom_match = df_genes["chrom"].apply(lambda c: chr_matches(c, target_chr))
         df_genes_overlapping = df_genes.loc[
-            (df_genes.chrom == row.target_chr)
+            chrom_match
             & (df_genes.txStart <= row.target_pos)
             & (row.target_pos <= df_genes.txEnd)
         ]
@@ -3426,7 +3468,9 @@ def replot(
         if not os.path.exists(output_folder):
             os.makedirs(output_folder, exist_ok=True)
 
-    reordered_stats_df = pd.read_csv(reordered_stats_file, sep="\t")
+    reordered_stats_df = pd.read_csv(reordered_stats_file, sep="\t", dtype={"target_chr": str})
+    if "target_chr" in reordered_stats_df.columns:
+        reordered_stats_df["target_chr"] = reordered_stats_df["target_chr"].apply(normalize_chr)
 
     stats_suffixes = ['_pooled_result_name', '_highest_a_g_pct', '_highest_c_t_pct', '_highest_indel_pct', '_mod_pct', '_tot_reads']
     sample_cols_reordered = ['target_id', 'target_name', 'sort_index', 'target_chr', 'target_pos', 'target_seq_no_gaps_with_pam', 'target_seq_no_gaps', 'target_seq_with_gaps', 'target_pam', 'ontarget_name', 'ontarget_sequence', 'matched_region_count', 'matched_region', 'matched_region_id', 'region_anno']
