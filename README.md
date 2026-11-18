@@ -36,12 +36,13 @@ CRISPRessoSea operates in three primary running modes to streamline the preparat
 ### Process
 `Process`: This program will process a pool of pools given:
  -  a [target information file](#target-file) with headers: Guide (Name of the on-target sequence guide), Sequence, PAM (PAM sequence), #MM (Number of mismatches), and Locus (formatted like chr1:+2345). Target names can be provided in a 'Target' column. 
- -  a [sample file](#sample-file) with headers: Name, fastq_r1, fastq_r2 (optional for single-end reads). A column specifying the group can also be provided in this file.
+ -  a [sample file](#sample-file) with headers: Name, fastq_r1, and optionally fastq_r2 (for paired-end reads), group, and display_name.
  -  a reference genome. The path to the reference genome and bowtie2 indices is provided not including the trailing .fa
 
  ### Replot
- `Replot`: This program will replot data from a finished analysis performed using `Process`. This avoids reprocessing or rerunning any analyses but allows users to reorder or subset guides to be plotted. This program accepts as input:
- - A modified file derived from an 'aggregated_stats_all.txt' output from a completed `Process` run.
+ `Replot`: This program will replot data from a finished analysis performed using `Process`. This avoids reprocessing or rerunning any analyses while allowing users to reorder or subset guides and samples, change sample display names, or update groups and statistical tests. This program accepts as input:
+ - A statistics file (`--reordered_stats_file`) derived from an `aggregated_stats_all.txt` output from a completed `Process` run.
+ - A [sample file](#sample-file) (`--reordered_sample_file`) specifying the samples to plot (allowing sample reordering, subsetting, group updates, or renaming sample labels via the `display_name` column).
 
 ## Tutorial
 
@@ -89,7 +90,7 @@ If you ran `MakeGuideFile`, you can now use the identified off-targets to run in
 ```
 CRISPRessoSea Process --sample_file samples.demo.txt --target_file CRISPRessoSea_MakeGuideFileOutput/CRISPRessoSea.guide_info.txt --genome_file demo_genome.fa
 ```
-- The `--sample_file` parameter specifies a [sample file](#sample-file) specifying the names and fastq sequences of samples with columns `Name`, `fastq_r1`, and optionally `fastq_r2` and `group`.
+- The `--sample_file` parameter specifies a [sample file](#sample-file) specifying the names and fastq sequences of samples with columns `Name`, `fastq_r1`, and optionally `fastq_r2`, `group`, and `display_name`.
 - The `--target_file` parameter specifies a [target file](#target-file) specifying the targets - in this case it is produced by the MakeGuideFile function.
 - The `--genome_file` parameter specifies the path to the genome file.
 
@@ -102,13 +103,13 @@ The `Process` function will produce an html report at CRISPRessoSea_output_on_sa
 The aggregated_stats_all.txt file includes a row for each target. Columns specify information about each target (columns `target_id`, `target_name`, `target_chr`, `target_pos`, etc) as well as aggregated information from each sample (columns that end with `_highest_a_g_pct`, `_highest_c_t_pct`, `_highest_indel_pct` and `_tot_reads`). 
 
 ### Replot
-If you'd like to change the order and name of guides, or add or change statistical tests, you can replot using the command:
+If you'd like to change the order and name of guides or samples, or add or change statistical tests, you can replot using the command:
 ```
 CRISPRessoSea Replot --output_folder replot.output --reordered_stats_file replot_agg_stats.txt --reordered_sample_file replot_samples.txt --sig_method_parameters t_test,Control,Treated,0.05 
 ```
 - The `--output_folder` parameter specifies where the replotted output will be produced.
 - The `--reordered_stats_file` parameter is a modified aggregated stats file in the format produced by `Process`.
-- The `--reordered_sample_file` parameter is a modified [sample file](#sample-file) where samples can be reordered if necessary.
+- The `--reordered_sample_file` parameter is a modified [sample file](#sample-file) where samples can be reordered, subsetted, assigned to groups, or renamed in plots via the `display_name` column (keeping `Name` matched to the sample prefixes in `aggregated_stats_all.txt`).
 - The `--sig_method_parameters` parameter specifies the significance test to be applied in the form of: 
  - none 
  - hard_cutoff,{cutoff}                     
@@ -164,7 +165,7 @@ options:
   -t TARGET_FILE, --target_file TARGET_FILE
                         Target file - list of targets with one target per line and the headers ['Guide','Sequence','PAM','#MM','Locus'] (default: None)
   -s SAMPLE_FILE, --sample_file SAMPLE_FILE
-                        Sample file - list of samples with one sample per line with headers ['Name','fastq_r1','fastq_r2'] (default: None)
+                        Sample file - list of samples with one sample per line with headers: Name, fastq_r1, fastq_r2, group, display_name (fastq_r2, group, and display_name are optional) (default: None)
   --gene_annotations GENE_ANNOTATIONS
                         Gene annotations file - a tab-separated .bed file with gene annotations with columns "chr" or "chrom", "start" or "txstart", and "end" or "txend" as well as "name" (default: None)
   -x GENOME_FILE, --genome_file GENOME_FILE
@@ -232,7 +233,7 @@ options:
   -f REORDERED_STATS_FILE, --reordered_stats_file REORDERED_STATS_FILE
                         Reordered statistics file - made by reordering rows from aggregated_stats_all.txt (default: None)
   -s REORDERED_SAMPLE_FILE, --reordered_sample_file REORDERED_SAMPLE_FILE
-                        Reordered_sample_file - path to the sample file with headers: Name, group, fastq_r1, fastq_r2 (group is always optional, fastq_r2 is optional for single-end reads) (default: None)
+                        Reordered_sample_file - path to the sample file with headers: Name, display_name, group, fastq_r1, fastq_r2 (display_name, group, fastq_r1, and fastq_r2 are optional) (default: None)
   --aggregation_method AGGREGATION_METHOD
                         Method for aggregating analysis outputs. Options are 'mod_pct' (takes the CRISPResso modification percentage), 'max_a_g' (for A>G base editors), 'max_c_t' (for C>T base editors), 'max_indel' (for indels), or 'all' (all comparisons are reported). (default: mod_pct)
   --fig_width FIG_WIDTH
@@ -324,22 +325,25 @@ This file lists all sequencing samples to be analyzed in a CRISPRessoSea run. Ea
 
 **Optional columns:**
 
-| Column    | Description                                                      |
-|-----------|------------------------------------------------------------------|
-| fastq_r2  | Path to the R2 FASTQ file (for paired-end reads)                 |
-| group     | Group label for the sample (used for grouping in plots/stats)    |
+| Column       | Description                                                                    |
+|--------------|--------------------------------------------------------------------------------|
+| fastq_r2     | Path to the R2 FASTQ file (for paired-end reads)                               |
+| group        | Group label for the sample (used for grouping in plots/stats)                  |
+| display_name | Custom display name for the sample in plots and HTML reports (defaults to `Name`) |
 
 **Notes:**
 - The `Name` column must be unique for each sample.
+- In `Replot`, `fastq_r1` is optional; `Name` must match the sample column prefixes in `--reordered_stats_file`, while `display_name` can be set to rename samples in the generated plots.
 - The `fastq_r2` column is optional and only needed for paired-end data.
 - The `group` column is optional but recommended for group-based analysis and plotting.
+- The `display_name` column is optional (must be unique across samples if provided). Output folders and `aggregated_stats_all.txt` columns remain keyed by `Name`, so `display_name` can be changed freely across `Replot` runs without editing `aggregated_stats_all.txt`.
 - Additional columns will be ignored.
 
 **Example:**
 ```tsv
-Name	fastq_r1	fastq_r2	group
-Sample1	/path/sample1_R1.fq	/path/sample1_R2.fq	Control
-Sample2	/path/sample2_R1.fq	/path/sample2_R2.fq	Treated
+Name	display_name	fastq_r1	fastq_r2	group
+Sample1	Control Rep 1	/path/sample1_R1.fq	/path/sample1_R2.fq	Control
+Sample2	Treated Rep 1	/path/sample2_R1.fq	/path/sample2_R2.fq	Treated
 ```
 
 ---

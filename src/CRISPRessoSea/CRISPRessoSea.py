@@ -302,7 +302,7 @@ def process_pools(
     Discover amplicons and analyze sample editing at amplicons. This is the main entrypoint for this program.
 
     params:
-    - sample_file: path to the sample file with headers: Name, group, fastq_r1, fastq_r2 (group is always optional, fastq_r2 is optional for single-end reads)
+    - sample_file: path to the sample file with headers: Name, group, display_name, fastq_r1, fastq_r2 (group and display_name are optional, fastq_r2 is optional for single-end reads)
     - target_file: path to the target file with headers: Guide, Sequence, PAM, #MM, Locus (may include other columns)
     - genome_file: path to the genome file (not including the trailing .fa)
     - output_folder: path to the output folder to produce data
@@ -582,11 +582,10 @@ def process_pools(
     crispresso2_info["results"]["completed_sea_arr"] = completed_samples
     crispresso2_info["results"]["failed_sea_arr"] = list(failed_samples.keys())
     crispresso2_info["results"]["failed_sea_arr_desc"] = failed_samples
-    crispresso2_info["results"]["sea_input_names"] = display_names
     crispresso2_info["results"]["summary_stats"] = aggregated_stats
-    crispresso2_info["results"]["sea_input_names"] = {
-        sample_name: sample_name for sample_name in sample_df["Name"]
-    }
+    crispresso2_info["results"]["sea_input_names"] = dict(
+        zip(sample_df["Name"], sample_df["display_name"])
+    )
 
 
     crispresso2_info["results"]["sea_input_groups"] = {}
@@ -861,9 +860,9 @@ def make_sea_report_from_folder(
     summary_plot_labels["samples"] = {}
     summary_plot_datas["samples"] = {"names": {}, "groups": {}}
     for sample in sea_names:
-        summary_plot_datas["samples"]["names"][sample] = display_names[sample]
+        summary_plot_datas["samples"]["names"][sample] = display_names.get(sample, sample)
         if groups:
-            summary_plot_datas["samples"]["groups"][sample] = groups[sample]
+            summary_plot_datas["samples"]["groups"][sample] = groups.get(sample, "Ungrouped")
 
     summary_plot_htmls = {}
     crispresso_data_path = os.path.relpath(
@@ -877,7 +876,7 @@ def make_sea_report_from_folder(
     sub_html_files = {}
     run_names = []
     for name in sea_names:
-        display_name = display_names[name]
+        display_name = display_names.get(name, name)
         sub_folder = os.path.join("CRISPResso_output", "CRISPRessoPooled_on_" + name)
         crispresso_folder = os.path.join(sea_folder, sub_folder)
         crispresso_info_file_path=os.path.join(crispresso_folder, "CRISPResso2Pooled_info.json")
@@ -896,7 +895,7 @@ def make_sea_report_from_folder(
             this_sub_html_file = os.path.join(
                 sub_folder, run_data["running_info"]["report_filename"]
             )
-        sub_html_files[display_name] = this_sub_html_file
+        sub_html_files[name] = this_sub_html_file
 
         run_names.append(display_name)
 
@@ -1185,18 +1184,20 @@ def run_initial_demux(
     return merged_regions_file
 
 
-def parse_sample_file(sample_file):
+def parse_sample_file(sample_file, require_fastq=True):
     """
     Parse a sample file and rename columns as neccessary
 
     params: 
     - sample_file: path to the sample file
+    - require_fastq: whether the fastq_r1 column is required (True for Process, False for Replot)
 
     returns:
     - sample_df: a pandas dataframe with the following columns:
         Name: the name of the sample
-        fastq_r1: the path to the R1 fastq file
-        fastq_r2: the path to the R2 fastq file
+        display_name: the display name of the sample (defaults to Name if not provided)
+        fastq_r1: the path to the R1 fastq file (when provided)
+        fastq_r2: the path to the R2 fastq file (when provided)
         group: the group of the sample
     """
     # Load sample file
@@ -1213,17 +1214,20 @@ def parse_sample_file(sample_file):
 
     renamed_columns = []
     for col in sample_df.columns:
-        if col.lower() == 'fastq_r1':
+        col_clean = str(col).strip().lower()
+        if col_clean == 'fastq_r1':
             renamed_columns.append("fastq_r1")
-        elif col.lower() == 'r1':
+        elif col_clean == 'r1':
             renamed_columns.append("fastq_r1")
-        elif col.lower() == 'fastq_r2':
+        elif col_clean == 'fastq_r2':
             renamed_columns.append("fastq_r2")
-        elif col.lower() == 'r2':
+        elif col_clean == 'r2':
             renamed_columns.append("fastq_r2")
-        elif col.lower() == 'name':
+        elif col_clean == 'name':
             renamed_columns.append("Name")
-        elif col.lower() == 'group':
+        elif col_clean == 'display_name':
+            renamed_columns.append("display_name")
+        elif col_clean == 'group':
             renamed_columns.append("group")
         else:
             renamed_columns.append(col)
@@ -1237,6 +1241,11 @@ def parse_sample_file(sample_file):
             + "Found columns: "
             + str(list(sample_df.columns))
         )
+    if renamed_columns.count("Name") > 1:
+        raise Exception('Sample file cannot have multiple "Name" columns.')
+
+    sample_df["Name"] = sample_df["Name"].astype(str).str.strip()
+
     if sample_df["Name"].duplicated().any():
         raise Exception(
             'In sample file "' + sample_file + '" each sample must have a unique value for "Name".\n'
@@ -1244,11 +1253,38 @@ def parse_sample_file(sample_file):
             + str('"' + '", "'.join(sample_df[sample_df["Name"].duplicated()]["Name"].unique()) + '"')
         )
 
+    # check for unique 'display_name' column
+    if "display_name" in sample_df.columns:
+        if renamed_columns.count("display_name") > 1:
+            raise Exception('Sample file cannot have multiple "display_name" columns.')
+        sample_df["display_name"] = sample_df["display_name"].where(
+            sample_df["display_name"].notna(), ""
+        ).astype(str).str.strip()
+        sample_df["display_name"] = np.where(
+            sample_df["display_name"] == "", sample_df["Name"], sample_df["display_name"]
+        )
+        if sample_df["display_name"].duplicated().any():
+            raise Exception(
+                'In sample file "' + sample_file + '" each sample must have a unique value for "display_name".\n'
+                + 'Duplicated "display_name" values: '
+                + str('"' + '", "'.join(sample_df[sample_df["display_name"].duplicated()]["display_name"].unique()) + '"')
+            )
+    else:
+        sample_df["display_name"] = sample_df["Name"]
+
     # add group column if not present
     if 'group' not in sample_df.columns:
         sample_df['group'] = ''
+    else:
+        sample_df['group'] = sample_df['group'].where(
+            sample_df['group'].notna(), ''
+        ).astype(str).str.strip()
+        if (sample_df['group'] != '').any() and (sample_df['group'] == '').any():
+            sample_df['group'] = np.where(
+                sample_df['group'] == '', 'Ungrouped', sample_df['group']
+            )
         
-    required_columns = ["Name", "fastq_r1"]
+    required_columns = ["Name", "fastq_r1"] if require_fastq else ["Name"]
     for col in required_columns:
         if col not in sample_df.columns:
             raise Exception(
@@ -1263,8 +1299,13 @@ def parse_sample_file(sample_file):
             )
 
     # Normalize sample metadata to strings so downstream command construction is stable.
-    sample_df["Name"] = sample_df["Name"].astype(str).str.strip()
-    sample_df["fastq_r1"] = sample_df["fastq_r1"].astype(str).str.strip()
+    if "fastq_r1" in sample_df.columns:
+        sample_df["fastq_r1"] = sample_df["fastq_r1"].where(
+            sample_df["fastq_r1"].notna(), None
+        )
+        sample_df["fastq_r1"] = sample_df["fastq_r1"].apply(
+            lambda x: str(x).strip() if x is not None else None
+        )
     if "fastq_r2" in sample_df.columns:
         sample_df["fastq_r2"] = sample_df["fastq_r2"].where(
             sample_df["fastq_r2"].notna(), None
@@ -2439,12 +2480,13 @@ def create_plots(
             filtered_data_df = data_df
         else: # if plotting for a specific group, filter the data_df to only include the samples in that group
             sample_names = sample_df[sample_df.get("group", "") == group]["Name"].tolist()
+            expected_sample_cols = {f"{s}_{p}" for s in sample_names for p in cols_to_plot}
             cols_to_keep = []
             for col in data_df.columns:
                 if not any(col.endswith(plot_col) for plot_col in cols_to_plot):
                     cols_to_keep.append(col)
                 else:
-                    if any(col.startswith(sample_name) for sample_name in sample_names):
+                    if col in expected_sample_cols:
                         cols_to_keep.append(col)
             filtered_data_df = data_df[cols_to_keep]
 
@@ -2565,14 +2607,21 @@ def plot_dot_plot(df, value_suffix, plot_title, file_prefix, sample_df, output_f
         value_name="Value",
     )
     melted_df["Name"] = melted_df["Sample"].apply(
-        lambda x: x.split(f"_{value_suffix}")[0]
+        lambda x: x[:-(len(value_suffix) + 1)] if x.endswith(f"_{value_suffix}") else x.split(f"_{value_suffix}")[0]
     )
     melted_df.drop(columns=["Sample"], inplace=True)
 
+    name_to_display = (
+        dict(zip(sample_df["Name"], sample_df["display_name"]))
+        if "display_name" in sample_df.columns
+        else {}
+    )
+    melted_df["display_name"] = melted_df["Name"].apply(lambda x: name_to_display.get(x, x))
+
     # melted_df now looks like this:
-    # target_id    target_name  Name     Value
-    # 0_Fs2_ON  guide1      sample1  0.5
-    # 1_Fs2_OFF1  guide1      sample1  0.5
+    # target_id    target_name  Name     Value  display_name
+    # 0_Fs2_ON  guide1      sample1  0.5    Sample 1
+    # 1_Fs2_OFF1  guide1      sample1  0.5    Sample 1
 
     if group_counts.shape[0] <= 1: # if only one group (or none)
         plt.figure(figsize=(dot_plot_fig_width, dot_plot_fig_height))
@@ -2580,7 +2629,7 @@ def plot_dot_plot(df, value_suffix, plot_title, file_prefix, sample_df, output_f
             data=melted_df,
             x="target_id",
             y="Value",
-            hue="Name",
+            hue="display_name",
             jitter=0.3,
             s=10,
             alpha=0.6,
@@ -2617,7 +2666,7 @@ def plot_dot_plot(df, value_suffix, plot_title, file_prefix, sample_df, output_f
         plt.close()
         
     else:
-        melted_df_with_group = melted_df.merge(sample_df, on='Name', how='left')
+        melted_df_with_group = melted_df.merge(sample_df[['Name', 'group']], on='Name', how='left')
         """
         #has columns 
         # target_id   target_name   Value   Name    group
@@ -2719,18 +2768,18 @@ def identify_significant_targets(df_data, df_total_count, sample_groups, sig_met
             return df_sig, None
         
         for idx, (df_idx, target_row) in enumerate(df_data.iterrows()):
+            group_1_data = target_row.iloc[group_1_inds].values.astype(float)
+            group_2_data = target_row.iloc[group_2_inds].values.astype(float)
             #check if any values are na
             if target_row.iloc[group_1_inds].isna().any() or target_row.iloc[group_2_inds].isna().any():
                 res_table_rows.append([
-                    group_1_data.nanmean(),
-                    group_2_data.nanmean(),
+                    np.nanmean(group_1_data),
+                    np.nanmean(group_2_data),
                     np.nan,  # Coefficient for the group effect
                     'NA values present in data',
                     False,  # No significance if NA values are present
                 ])
                 continue
-            group_1_data = target_row.iloc[group_1_inds].values
-            group_2_data = target_row.iloc[group_2_inds].values
 
             # Calculate mean difference
             mean_diff = np.mean(group_1_data) - np.mean(group_2_data)
@@ -3100,25 +3149,39 @@ def plot_targets_and_heatmap(
     cols_to_plot = [col for col in df_data.columns if col.endswith(col_to_plot)]
     if len(cols_to_plot) == 0:
         raise Exception("No columns found in df_data with suffix " + col_to_plot + " in columns: " + str(list(df_data.columns)))
-    df_to_plot = df_data[cols_to_plot]
+    df_to_plot = df_data[cols_to_plot].copy()
     df_to_plot.index = [df_data['target_name'], df_data['target_id']]
-    df_to_plot.columns = [col.replace("_" + col_to_plot, "") for col in cols_to_plot]
+    raw_sample_names = [
+        col[:-(len(col_to_plot) + 1)] if col.endswith("_" + col_to_plot) else col.replace("_" + col_to_plot, "")
+        for col in cols_to_plot
+    ]
 
     #calculate total counts for negative binomial
     total_count_cols = [col for col in df_data.columns if col.endswith("tot_reads")]
     if len(total_count_cols) == 0:
         raise Exception("No total count columns found in " + str(list(df_data.columns)))
-    df_total_count = df_data[total_count_cols]
+    df_total_count = df_data[total_count_cols].copy()
     df_total_count.index = df_data['target_id']
-    df_total_count.columns = [col.replace('_tot_reads', "") for col in cols_to_plot]
+    raw_total_count_names = [
+        col[:-len("_tot_reads")] if col.endswith("_tot_reads") else col.replace('_tot_reads', "")
+        for col in total_count_cols
+    ]
 
     sample_groups = []
-    for sample_name in df_to_plot.columns:
+    for sample_name in raw_sample_names:
         if sample_name in sample_df['Name'].values:
             this_sample_group = sample_df[sample_df["Name"] == sample_name]["group"].values[0]
             sample_groups.append(this_sample_group)
         else:
             sample_groups.append('NA')
+
+    name_to_display = (
+        dict(zip(sample_df["Name"], sample_df["display_name"]))
+        if "display_name" in sample_df.columns
+        else {}
+    )
+    df_to_plot.columns = [name_to_display.get(s, s) for s in raw_sample_names]
+    df_total_count.columns = [name_to_display.get(s, s) for s in raw_total_count_names]
 
 
     df_sig, df_pvals = identify_significant_targets(df_data=df_to_plot, df_total_count=df_total_count, sample_groups=sample_groups, sig_method_parameters=sig_method_parameters)
@@ -3440,7 +3503,7 @@ def replot(
 
     params:
     - reordered_stats_file: the reordered stats file based on (having the same columns and layout as) a previously-completed aggregated_stats_all.txt file
-    - reordered_sample_file: path to the sample file with headers: Name, group, fastq_r1, fastq_r2 (group is always optional, fastq_r2 is optional for single-end reads)
+    - reordered_sample_file: path to the sample file with headers: Name, display_name, group, fastq_r1, fastq_r2 (display_name, group, fastq_r1, and fastq_r2 are optional)
     - output_folder: the output folder for the output plots
     - file_prefix: the prefix for the output plots
     - fig_height: the height of the figure
@@ -3462,7 +3525,7 @@ def replot(
     - agg_methods: list of aggregation methods to plot (e.g., ['max_ag', 'max_indel'])
     """
 
-    sample_df = parse_sample_file(reordered_sample_file)
+    sample_df = parse_sample_file(reordered_sample_file, require_fastq=False)
 
     if output_folder is not None:
         if not os.path.exists(output_folder):
@@ -3726,7 +3789,7 @@ def main():
     process_parser.add_argument(
         "-s",
         "--sample_file",
-        help="Sample file - list of samples with one sample per line with headers ['Name','fastq_r1','fastq_r2']",
+        help="Sample file - list of samples with one sample per line with headers: Name, fastq_r1, fastq_r2, group, display_name (fastq_r2, group, and display_name are optional)",
         required=True,
     )
     process_parser.add_argument(
@@ -3892,7 +3955,7 @@ def main():
     plot_parser.add_argument(
         "-s",
         "--reordered_sample_file",
-        help="Reordered_sample_file - path to the sample file with headers: Name, group, fastq_r1, fastq_r2 (group is always optional, fastq_r2 is optional for single-end reads)",
+        help="Reordered_sample_file - path to the sample file with headers: Name, display_name, group, fastq_r1, fastq_r2 (display_name, group, fastq_r1, and fastq_r2 are optional)",
         required=True,
     )
     plot_parser.add_argument(
@@ -4097,11 +4160,11 @@ def main():
             raise Exception('Reordered statistics file is not found at "' + args.reordered_stats_file + '". Use an aggregated_stats_all.txt file from a previous run as a template.')
 
         if not os.path.isfile(args.reordered_sample_file):
-            raise Exception("Sample file not found at " + args.sample_file + "\n" + \
-                            "Please provide a sample file with headers ['Name','fastq_r1','fastq_r2']")
+            raise Exception("Sample file not found at " + args.reordered_sample_file + "\n" + \
+                            "Please provide a sample file with column 'Name' (and optional 'display_name', 'group', 'fastq_r1', 'fastq_r2')")
         
         sample_groups = None
-        sample_df = parse_sample_file(args.reordered_sample_file)
+        sample_df = parse_sample_file(args.reordered_sample_file, require_fastq=False)
         if 'group' in sample_df.columns:
             # if the sample file has a group column, use it to determine the groups
             sample_groups = list(sample_df["group"].unique())
